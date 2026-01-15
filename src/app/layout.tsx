@@ -16,20 +16,20 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "plnngpkr - Planning Poker for Agile Teams",
+  title: "plnngpkr - Story Estimation for Agile Teams",
   description:
-    "Free, real-time planning poker for agile teams. Estimate stories together with customizable card decks, no signup required.",
+    "Free, real-time story estimation for agile teams. Estimate stories together with customizable card decks, no signup required.",
   keywords: [
-    "planning poker",
-    "scrum poker",
     "agile estimation",
     "story points",
     "sprint planning",
+    "scrum estimation",
+    "team voting",
   ],
   openGraph: {
-    title: "plnngpkr - Planning Poker for Agile Teams",
+    title: "plnngpkr - Story Estimation for Agile Teams",
     description:
-      "Free, real-time planning poker for agile teams. Estimate stories together with customizable card decks.",
+      "Free, real-time story estimation for agile teams. Estimate stories together with customizable card decks.",
     type: "website",
   },
 };

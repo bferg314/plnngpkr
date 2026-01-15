@@ -175,7 +175,7 @@ export default function Home() {
               transition={{ duration: 0.5 }}
               className="text-4xl md:text-6xl font-bold tracking-tight mb-6"
             >
-              Planning Poker for{" "}
+              Story Estimation for{" "}
               <span className="gradient-text">Agile Teams</span>
             </motion.h1>
             <motion.p
@@ -343,7 +343,7 @@ export default function Home() {
             Ready to estimate with your team?
           </h2>
           <p className="mb-8 opacity-90 max-w-xl mx-auto">
-            Create a room in seconds and start your planning poker session.
+            Create a room in seconds and start your estimation session.
             Free forever, no credit card required.
           </p>
           <Link href="/create">
@@ -369,7 +369,7 @@ export default function Home() {
                 </span>
               </div>
               <span className="text-sm text-muted-foreground">
-                plnngpkr - Planning Poker for Agile Teams
+                plnngpkr - Story Estimation for Agile Teams
               </span>
             </div>
             <div className="text-sm text-muted-foreground">

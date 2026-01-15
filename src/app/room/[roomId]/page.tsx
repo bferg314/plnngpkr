@@ -8,7 +8,7 @@ import { Settings } from "lucide-react";
 import { useSocket } from "@/hooks/useSocket";
 import { useRoomStore, selectCurrentStory, selectIsCurrentUserModerator } from "@/stores/roomStore";
 import { CardDeck } from "@/components/room/voting/CardDeck";
-import { VoteCard } from "@/components/room/voting/PokerCard";
+import { VoteCard } from "@/components/room/voting/EstimateCard";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -176,7 +176,7 @@ export default function RoomPage() {
       <Dialog open={showJoinDialog} onOpenChange={() => {}}>
         <DialogContent className="sm:max-w-md" showCloseButton={false}>
           <DialogHeader>
-            <DialogTitle>Join Planning Poker</DialogTitle>
+            <DialogTitle>Join Estimation Session</DialogTitle>
             <DialogDescription>
               Enter your name to join the session
             </DialogDescription>

@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { PokerCard } from "./PokerCard";
+import { EstimateCard } from "./EstimateCard";
 import { cn } from "@/lib/utils";
 import type { CardValue } from "@/types";
 
@@ -35,7 +35,7 @@ export function CardDeck({
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.3, delay: index * 0.03 }}
           >
-            <PokerCard
+            <EstimateCard
               value={card}
               isSelected={selectedCard === card}
               onClick={() => onSelectCard(card)}

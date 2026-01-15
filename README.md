@@ -1,6 +1,6 @@
-# Planning Poker (plnngpkr)
+# plnngpkr
 
-A real-time planning poker application for agile teams to collaboratively estimate stories.
+A real-time story estimation app for agile teams to collaboratively estimate stories.
 
 ## Features
 

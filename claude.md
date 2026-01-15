@@ -1,6 +1,6 @@
-# Planning Poker (plnngpkr)
+# plnngpkr
 
-A real-time planning poker application for agile teams to estimate stories collaboratively.
+A real-time story estimation app for agile teams to estimate stories collaboratively.
 
 ## Tech Stack
 
@@ -24,7 +24,7 @@ src/
     create/               # Room creation page
     room/[roomId]/        # Voting room page
   components/
-    room/voting/          # Voting-related components (PokerCard, CardDeck)
+    room/voting/          # Voting-related components (EstimateCard, CardDeck)
     ui/                   # shadcn/ui components
   hooks/                  # Custom hooks (useSocket)
   lib/
@@ -44,7 +44,7 @@ server/                   # Socket.io server
 
 - `src/app/room/[roomId]/page.tsx` - Main voting room UI
 - `src/stores/roomStore.ts` - Client-side state management
-- `src/components/room/voting/PokerCard.tsx` - Card components (PokerCard, VoteCard)
+- `src/components/room/voting/EstimateCard.tsx` - Card components (EstimateCard, VoteCard)
 - `src/components/room/voting/CardDeck.tsx` - Card selection deck
 - `src/hooks/useSocket.ts` - Socket.io connection management
 - `server/socket.ts` - Server-side event handling

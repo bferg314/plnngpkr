@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import type { CardValue } from "@/types";
 
-interface PokerCardProps {
+interface EstimateCardProps {
   value: CardValue;
   isSelected?: boolean;
   isRevealed?: boolean;
@@ -21,7 +21,7 @@ const sizeClasses = {
   lg: "w-20 h-32 text-2xl",
 };
 
-export function PokerCard({
+export function EstimateCard({
   value,
   isSelected = false,
   isRevealed = true,
@@ -30,7 +30,7 @@ export function PokerCard({
   size = "md",
   disabled = false,
   className,
-}: PokerCardProps) {
+}: EstimateCardProps) {
   const isSpecialCard = value === "?" || value === "☕" || value === "∞";
 
   return (

@@ -117,7 +117,7 @@ export default function CreateRoomPage() {
         >
           <h1 className="text-3xl font-bold mb-2">Create a Room</h1>
           <p className="text-muted-foreground mb-8">
-            Set up your planning poker session in seconds.
+            Set up your estimation session in seconds.
           </p>
 
           <div className="space-y-6">
