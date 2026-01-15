@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
+import { nanoid } from "nanoid";
 import { useRoomStore } from "@/stores/roomStore";
 // Server message types are handled inline
 
@@ -32,7 +33,7 @@ export function useSocket(roomId: string | null) {
     (name: string, isSpectator: boolean) => {
       if (!roomId) return;
 
-      const pid = participantId || crypto.randomUUID();
+      const pid = participantId || nanoid();
       useRoomStore.getState().setParticipant(pid, name);
 
       // Store participant ID in localStorage for reconnection
