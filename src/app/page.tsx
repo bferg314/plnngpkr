@@ -1,9 +1,12 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
+import { Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { SettingsDialog } from "@/components/settings-dialog";
 import { PRESET_DECKS } from "@/lib/constants/decks";
 
 const features = [
@@ -133,6 +136,8 @@ const features = [
 const sampleCards = PRESET_DECKS.fibonacci.slice(0, 7);
 
 export default function Home() {
+  const [showSettings, setShowSettings] = useState(false);
+
   return (
     <div className="min-h-screen">
       {/* Header */}
@@ -144,9 +149,19 @@ export default function Home() {
             </div>
             <span className="font-semibold text-lg">plnngpkr</span>
           </Link>
-          <Link href="/create">
-            <Button>Create Room</Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setShowSettings(true)}
+              aria-label="Settings"
+            >
+              <Settings className="w-5 h-5" />
+            </Button>
+            <Link href="/create">
+              <Button>Create Room</Button>
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -363,6 +378,9 @@ export default function Home() {
           </div>
         </div>
       </footer>
+
+      {/* Settings Dialog */}
+      <SettingsDialog open={showSettings} onOpenChange={setShowSettings} />
     </div>
   );
 }

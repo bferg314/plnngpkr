@@ -4,10 +4,12 @@ import { useEffect, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
+import { Settings } from "lucide-react";
 import { useSocket } from "@/hooks/useSocket";
 import { useRoomStore, selectCurrentStory, selectIsCurrentUserModerator } from "@/stores/roomStore";
 import { CardDeck } from "@/components/room/voting/CardDeck";
 import { VoteCard } from "@/components/room/voting/PokerCard";
+import { SettingsDialog } from "@/components/settings-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -39,6 +41,7 @@ export default function RoomPage() {
   const [copiedLink, setCopiedLink] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [importText, setImportText] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
 
   const {
     isConnecting,
@@ -279,6 +282,14 @@ export default function RoomPage() {
             </Button>
             <Button variant="ghost" size="sm" onClick={toggleChat}>
               Chat
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setShowSettings(true)}
+              aria-label="Settings"
+            >
+              <Settings className="w-4 h-4" />
             </Button>
           </div>
         </div>
@@ -616,6 +627,9 @@ export default function RoomPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Settings Dialog */}
+      <SettingsDialog open={showSettings} onOpenChange={setShowSettings} />
     </div>
   );
 }
