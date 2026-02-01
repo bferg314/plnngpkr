@@ -372,8 +372,15 @@ export default function Home() {
                 plnngpkr - Story Estimation for Agile Teams
               </span>
             </div>
-            <div className="text-sm text-muted-foreground">
-              Self-hosted with Docker
+            <div className="flex items-center gap-4 text-sm text-muted-foreground">
+              <span>Self-hosted with Docker</span>
+              <span className="text-muted-foreground/50">•</span>
+              <Link
+                href="/terms"
+                className="hover:text-foreground transition-colors underline-offset-4 hover:underline"
+              >
+                Terms of Service
+              </Link>
             </div>
           </div>
         </div>

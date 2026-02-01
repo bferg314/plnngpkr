@@ -35,15 +35,32 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
         return;
       }
 
-      // Create or update participant
-      const participant: Participant = {
-        id: participantId,
-        name,
-        isSpectator,
-        isModerator: false,
-        hasVoted: false,
-        connectionStatus: "connected",
-      };
+      // Check if participant already exists (reconnecting)
+      const room = rooms.getRoom(roomId);
+      const existingParticipant = room?.participants.get(participantId);
+
+      let participant: Participant;
+      let isRejoining = false;
+
+      if (existingParticipant) {
+        // Participant is rejoining - preserve their state but update connection info
+        participant = {
+          ...existingParticipant,
+          name, // Allow name updates
+          connectionStatus: "connected",
+        };
+        isRejoining = true;
+      } else {
+        // New participant joining
+        participant = {
+          id: participantId,
+          name,
+          isSpectator,
+          isModerator: false,
+          hasVoted: false,
+          connectionStatus: "connected",
+        };
+      }
 
       const addedParticipant = rooms.addParticipant(roomId, participant);
       if (!addedParticipant) {
@@ -51,7 +68,16 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
         return;
       }
 
-      // Store mapping
+      // Clean up any old socket mappings for this participant (if reconnecting)
+      if (isRejoining) {
+        for (const [socketId, info] of socketToParticipant.entries()) {
+          if (info.participantId === participantId && info.roomId === roomId && socketId !== socket.id) {
+            socketToParticipant.delete(socketId);
+          }
+        }
+      }
+
+      // Store new mapping
       socketToParticipant.set(socket.id, { roomId, participantId });
 
       // Join socket room
@@ -61,16 +87,27 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
       const state = rooms.getRoomState(roomId);
       socket.emit("sync", { state });
 
-      // Notify others
-      socket.to(roomId).emit("participantJoined", { participant: addedParticipant });
+      if (isRejoining) {
+        // Notify others that participant reconnected
+        socket.to(roomId).emit("participantUpdated", { participant: addedParticipant });
 
-      // Add system message
-      const message = rooms.addSystemMessage(roomId, `${name} joined the room`);
-      if (message) {
-        io.to(roomId).emit("chatMessage", { message });
+        // Add system message for reconnection
+        const message = rooms.addSystemMessage(roomId, `${name} reconnected`);
+        if (message) {
+          io.to(roomId).emit("chatMessage", { message });
+        }
+      } else {
+        // Notify others of new participant
+        socket.to(roomId).emit("participantJoined", { participant: addedParticipant });
+
+        // Add system message for new join
+        const message = rooms.addSystemMessage(roomId, `${name} joined the room`);
+        if (message) {
+          io.to(roomId).emit("chatMessage", { message });
+        }
       }
 
-      console.log(`${name} joined room ${roomId}`);
+      console.log(`${name} ${isRejoining ? 'rejoined' : 'joined'} room ${roomId}`);
     });
 
     // Handle voting

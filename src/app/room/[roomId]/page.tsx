@@ -82,14 +82,20 @@ export default function RoomPage() {
 
   // Check for saved participant info on mount
   const savedNameRef = useRef<string | null>(null);
+  const savedIdRef = useRef<string | null>(null);
   if (savedNameRef.current === null && typeof window !== "undefined") {
     savedNameRef.current = localStorage.getItem("plnngpkr_participant_name") || "";
+    savedIdRef.current = localStorage.getItem("plnngpkr_participant_id") || null;
   }
 
-  // Initialize join name from saved value
+  // Initialize join name and participant ID from saved values
   useEffect(() => {
     if (savedNameRef.current && !joinName) {
       setJoinName(savedNameRef.current);
+    }
+    // Load saved participant ID into the store so it gets reused on reconnection
+    if (savedIdRef.current && !participantId) {
+      useRoomStore.getState().setParticipant(savedIdRef.current, savedNameRef.current || "");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
