@@ -29,7 +29,7 @@ export default function CreateRoomPage() {
   const router = useRouter();
   const [isCreating, setIsCreating] = useState(false);
   const [roomName, setRoomName] = useState("");
-  const [deckType, setDeckType] = useState<DeckType>("fibonacci");
+  const [deckType, setDeckType] = useState<DeckType>("fibonacciMini");
   const [customDeck, setCustomDeck] = useState<CardValue[]>([]);
   const [customDeckInput, setCustomDeckInput] = useState("");
   const [settings, setSettings] = useState(DEFAULT_ROOM_SETTINGS);
