@@ -1,96 +1,136 @@
+<div align="center">
+
+<img src="src/app/icon.svg" alt="plnngpkr logo" width="64" height="64" />
+
 # plnngpkr
 
-A real-time story estimation app for agile teams to collaboratively estimate stories during sprint planning.
+**Fast, real-time Agile Planning Poker for engineering teams.**  
+No signups. No paywalls. Share a link and start estimating stories in seconds.
 
-## Features
+[![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org/)
+[![React](https://img.shields.io/badge/React-19-149eca?logo=react)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript)](https://www.typescriptlang.org/)
+[![Socket.IO](https://img.shields.io/badge/Socket.IO-4.8-010101?logo=socket.io)](https://socket.io/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791?logo=postgresql)](https://www.postgresql.org/)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ed?logo=docker)](https://www.docker.com/)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](./LICENSE)
 
-- **Real-time Voting** - Synchronized voting across all participants using Socket.io
-- **Multiple Deck Types** - Fibonacci, T-shirt sizes, Powers of 2, Sequential, and custom decks
-- **Story Management** - Add, edit, delete, and reorder stories with drag-and-drop
-- **Bulk Import** - Import multiple stories at once from text
-- **Voting Statistics** - View average, median, mode, and consensus after reveal
-- **Results Memory** - Story voting results are cached and recalled when re-selected
-- **Timer** - Optional countdown timer for time-boxed voting
-- **Chat** - Built-in chat for team communication
-- **Spectator Mode** - Allow observers to watch without voting
-- **Moderator Controls** - Reveal votes, reset, kick participants, promote moderators, set final estimates
-- **Color Themes** - Customizable accent colors and dark/light mode support
-- **Self-hosted** - Docker support for easy deployment
+[**Features**](#-features) • [**Quick Start**](#-quick-start) • [**Docker Deployment**](#-docker-deployment) • [**Configuration**](#%EF%B8%8F-configuration) • [**Architecture**](#-architecture)
 
-## Tech Stack
+</div>
 
-- **Framework:** Next.js 16 (App Router) with React 19
-- **Language:** TypeScript
-- **Styling:** Tailwind CSS
-- **UI Components:** Radix UI (via shadcn/ui)
-- **Animations:** Framer Motion
-- **State Management:** Zustand
-- **Real-time:** Socket.io (client and server)
-- **Database:** Drizzle ORM with PostgreSQL
-- **Icons:** Lucide React
-- **Notifications:** Sonner
+---
 
-## Getting Started
+## 📸 Preview
+
+<div align="center">
+  <img src="public/screenshot.png" alt="plnngpkr live estimation room" width="100%" />
+</div>
+
+---
+
+## ✨ Features
+
+| Category | Capabilities |
+| :--- | :--- |
+| **🃏 Real-Time Voting** | Instant bi-directional sync via **Socket.IO**. Unrevealed votes are redacted server-side until reveal so votes remain strictly private. Click a selected card again to unvote. |
+| **📚 Flexible Card Decks** | Built-in **Fibonacci**, **Mini Fibonacci**, **T-Shirt Sizes**, **Powers of 2**, **Sequential**, plus an interactive **Custom Deck Builder**. |
+| **📋 Story Management** | Add stories with descriptions, **bulk-import** multi-line backlogs, **edit**, **delete**, **reorder**, and **export** completed estimates as **CSV** or **JSON**. |
+| **📊 Instant Analytics** | Automatically computes **Average**, **Median**, **Most Common (Mode)**, **Spread**, and **Consensus** indicators on reveal. |
+| **🧠 Results Memory** | Switching back to a previously estimated story automatically recalls its historical votes and statistics. |
+| **👑 Moderator Controls** | Reveal/reset votes, lock in final estimates across the full deck, run a **countdown timer** (start/pause/resume/reset), **promote moderators**, **remove participants**, and adjust room settings live. |
+| **👀 Spectator Mode** | Product owners, scrum masters, and stakeholders can observe sessions in real time without affecting vote tallies. |
+| **💬 Built-In Chat** | Real-time room chat with system activity logs (joins, reconnections, moderator changes) and unread message badges. |
+| **🎨 Custom Themes** | Light, Dark, and System modes paired with **7 customizable accent color themes**. |
+| **💾 Hybrid Persistence** | Works out-of-the-box with zero-config in-memory state (with a 1-hour empty-room TTL grace period) **or** persists rooms, stories, and vote history to **PostgreSQL** via **Drizzle ORM**. |
+
+---
+
+## 🚀 Quick Start
 
 ### Prerequisites
 
-- Node.js 20+
-- npm, yarn, pnpm, or bun
-- PostgreSQL (or use Docker)
+- **Node.js** 20+
+- **npm** (or pnpm / yarn / bun)
+- **PostgreSQL 16+** *(optional — falls back to in-memory storage automatically if `DATABASE_URL` is omitted)*
 
 ### Local Development
 
 ```bash
-# Install dependencies
+# 1. Clone the repository
+git clone https://github.com/bferg314/plnngpkr.git
+cd plnngpkr
+
+# 2. Install dependencies
 npm install
 
-# Copy environment file and configure
+# 3. Configure environment variables (optional for in-memory mode)
 cp .env.example .env
 
-# Start development server (Next.js + Socket.io)
+# 4. Start the Next.js + Socket.IO development server
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+Open **[http://localhost:3000](http://localhost:3000)** in your browser.
 
-### Docker Deployment
+---
 
-#### Development
+## 🐳 Docker Deployment
+
+`plnngpkr` ships with three Docker Compose configurations tailored for different workflows:
+
+### 1. Local Development with Hot-Reload (`docker-compose.dev.yml`)
+Mounts your local source tree for live reloading and spins up a local PostgreSQL 16 container with default credentials:
 
 ```bash
-docker-compose -f docker-compose.dev.yml up
+docker compose -f docker-compose.dev.yml up --build
+
+# (First time only) Push the Drizzle schema to the dev Postgres container
+docker exec -it plnngpkr-app-dev npm run db:push
 ```
 
-#### Production
+### 2. Local Production Build (`docker-compose.yml`)
+Builds the hardened multi-stage production `Dockerfile` locally alongside PostgreSQL 16:
 
 ```bash
-# Create .env file with your configuration
 cp .env.example .env
-# Edit .env with your production values
-
-# Build and start
-docker-compose up -d --build
+# Edit .env with yourPOSTGRES_PASSWORD and NEXT_PUBLIC_APP_URL
+docker compose up -d --build
 ```
 
-## Environment Variables
+### 3. Pre-Built Container Registry Deployment (`docker-compose.prod.yml`)
+Pulls the official pre-built image (`ghcr.io/bferg314/plnngpkr:latest`) for fast server deployment:
 
-Copy `.env.example` to `.env` and configure:
+```bash
+cp .env.example .env
+docker compose -f docker-compose.prod.yml up -d
+```
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `POSTGRES_USER` | Database username | `plnngpkr` |
-| `POSTGRES_PASSWORD` | Database password | `your_secure_password` |
-| `POSTGRES_DB` | Database name | `plnngpkr` |
-| `DATABASE_URL` | Full connection string | `postgresql://user:pass@host:5432/db` |
-| `NODE_ENV` | Environment mode | `production` |
-| `PORT` | Server port | `3000` |
-| `NEXT_PUBLIC_APP_URL` | Public URL for the app | `https://your-domain.com` |
+---
 
-## Reverse Proxy Configuration
+## ⚙️ Configuration
 
-When deploying behind a reverse proxy (nginx, Traefik, Caddy, etc.), ensure WebSocket support is enabled.
+Copy `.env.example` to `.env` to customize your environment:
 
-### Nginx Example
+| Variable | Required | Default | Description |
+| :--- | :---: | :---: | :--- |
+| `PORT` | No | `3000` | HTTP & WebSocket server port |
+| `HOSTNAME` | No | `0.0.0.0` | Server bind address |
+| `NODE_ENV` | No | `development` | Environment mode (`development` or `production`) |
+| `NEXT_PUBLIC_APP_URL` | No | `http://localhost:3000` | Public URL used by clients |
+| `DATABASE_URL` | No* | — | PostgreSQL connection URI (`postgresql://user:pass@host:5432/db`). *If omitted, runs in-memory.* |
+| `POSTGRES_USER` | Docker | `plnngpkr` | PostgreSQL username for Docker Compose |
+| `POSTGRES_PASSWORD` | Docker | — | PostgreSQL password for Docker Compose |
+| `POSTGRES_DB` | Docker | `plnngpkr` | PostgreSQL database name for Docker Compose |
+
+---
+
+## 🌐 Reverse Proxy Setup
+
+When hosting behind a reverse proxy, ensure **WebSocket (`Upgrade`)** headers are forwarded for `/socket.io`.
+
+<details>
+<summary><strong>Nginx Configuration</strong></summary>
 
 ```nginx
 location / {
@@ -105,56 +145,68 @@ location / {
     proxy_read_timeout 86400;
 }
 ```
+</details>
 
-### Nginx Proxy Manager
+<details>
+<summary><strong>Caddy Configuration</strong></summary>
 
-Enable "Websockets Support" in the proxy host settings.
-
-## Project Structure
-
+```caddyfile
+poker.yourdomain.com {
+    reverse_proxy localhost:3000
+}
 ```
-src/
-  app/                    # Next.js App Router pages
-    api/                  # API routes
-    create/               # Room creation page
-    room/[roomId]/        # Voting room page
-  components/
-    room/voting/          # Voting components (EstimateCard, CardDeck)
-    ui/                   # shadcn/ui components
-  hooks/                  # Custom hooks (useSocket)
-  lib/
-    constants/            # Deck configurations
-    db/                   # Database schema and connection
-    utils/                # Utility functions (statistics, cn)
-  stores/                 # Zustand stores (roomStore, settingsStore)
-  types/                  # TypeScript type definitions
+</details>
 
-server/                   # Socket.io server
-  index.ts                # HTTP server setup
-  socket.ts               # WebSocket event handlers
-  rooms.ts                # In-memory room state management
+---
+
+## 🏗️ Architecture
+
+```text
+plnngpkr/
+├── server/
+│   ├── index.ts                # Custom Node HTTP server + Next.js + Socket.IO bootstrap
+│   ├── socket.ts               # WebSocket event handlers & moderator authorization
+│   ├── rooms.ts                # Room state engine, vote redaction, TTL, & DB write-behind
+│   └── __tests__/              # Server & room state unit tests
+├── src/
+│   ├── app/
+│   │   ├── api/                # REST endpoints (/api/health, /api/rooms, /api/rooms/[id]/export)
+│   │   ├── create/             # Session & custom deck configuration UI
+│   │   ├── room/[roomId]/      # Main real-time voting room interface
+│   │   └── terms/              # Terms of Service page
+│   ├── components/
+│   │   ├── room/voting/        # 3D flip EstimateCard, VoteCard, and CardDeck components
+│   │   ├── ui/                 # Radix UI + Tailwind primitives (shadcn/ui)
+│   │   └── settings-dialog.tsx # Theme & live Moderator room settings modal
+│   ├── hooks/
+│   │   └── useSocket.ts        # Typed Socket.IO client hook & reconnection manager
+│   ├── lib/
+│   │   ├── constants/decks.ts  # Preset decks & default room settings
+│   │   ├── db/                 # Drizzle ORM schema (rooms, stories, vote_history)
+│   │   └── utils/statistics.ts # Average, median, mode, consensus & spread calculators
+│   └── stores/
+│       ├── roomStore.ts        # Zustand store & selectors for room state
+│       └── settingsStore.ts    # Persistent client theme preferences
+└── Dockerfile                  # Hardened multi-stage Node 20 Alpine build
 ```
 
-## How It Works
+---
 
-1. **Create a Room** - A moderator creates a room with their preferred deck type
-2. **Share the Link** - Team members join via the room link
-3. **Add Stories** - Moderator adds stories to estimate (or imports in bulk)
-4. **Vote** - All participants select their estimates simultaneously
-5. **Reveal** - Moderator reveals votes to see results and statistics
-6. **Discuss & Finalize** - Team discusses and moderator sets the final estimate
-7. **Next Story** - Move to the next story and repeat
-
-## Development Commands
+## 🛠️ Development Scripts
 
 ```bash
-npm run dev          # Start development server (Next.js + Socket.io)
-npm run build        # Build for production
-npm run start        # Start production server
-npm run lint         # Run ESLint
-npm test             # Run unit tests
+npm run dev          # Start development server (Next.js + Socket.IO)
+npm run build        # Build Next.js application for production
+npm run start        # Start production server (cross-platform)
+npm run lint         # Run ESLint static analysis
+npm test             # Run unit test suite (statistics & room state engine)
+npm run db:generate  # Generate Drizzle SQL migrations
+npm run db:push      # Push Drizzle schema directly to PostgreSQL
+npm run db:studio    # Open Drizzle Studio database GUI
 ```
 
-## License
+---
 
-AGPL-3.0-or-later
+## 📄 License
+
+Distributed under the **[GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later)](./LICENSE)**.
