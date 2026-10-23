@@ -25,8 +25,19 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
     console.log(`Socket connected: ${socket.id}`);
 
     // Join room
-    socket.on("join", (data: { roomId: string; participantId: string; name: string; isSpectator: boolean }) => {
-      const { roomId, participantId, name, isSpectator } = data;
+    socket.on("join", async (data: { roomId: string; participantId: string; name: string; isSpectator: boolean }) => {
+      if (!data || !data.roomId || !data.participantId || !data.name?.trim()) {
+        socket.emit("error", { message: "Invalid join parameters", code: "INVALID_PARAMS" });
+        return;
+      }
+
+      const { roomId, participantId, isSpectator } = data;
+      const name = data.name.trim().slice(0, 60);
+
+      // Hydrate from DB if not in memory
+      if (!rooms.getRoom(roomId)) {
+        await rooms.hydrateRoomFromDb(roomId);
+      }
 
       // Check if room exists
       const roomState = rooms.getRoomState(roomId);
@@ -55,7 +66,7 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
         participant = {
           id: participantId,
           name,
-          isSpectator,
+          isSpectator: Boolean(isSpectator),
           isModerator: false,
           hasVoted: false,
           connectionStatus: "connected",
@@ -83,13 +94,18 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
       // Join socket room
       socket.join(roomId);
 
-      // Send full state to joining client
-      const state = rooms.getRoomState(roomId);
+      // Send full state to joining client (including their own unrevealed vote if any)
+      const state = rooms.getRoomState(roomId, participantId);
       socket.emit("sync", { state });
 
       if (isRejoining) {
         // Notify others that participant reconnected
-        socket.to(roomId).emit("participantUpdated", { participant: addedParticipant });
+        socket.to(roomId).emit("participantUpdated", {
+          participant: {
+            ...addedParticipant,
+            currentVote: state?.votingRound?.status === "revealed" ? addedParticipant.currentVote : undefined,
+          },
+        });
 
         // Add system message for reconnection
         const message = rooms.addSystemMessage(roomId, `${name} reconnected`);
@@ -98,7 +114,12 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
         }
       } else {
         // Notify others of new participant
-        socket.to(roomId).emit("participantJoined", { participant: addedParticipant });
+        socket.to(roomId).emit("participantJoined", {
+          participant: {
+            ...addedParticipant,
+            currentVote: undefined,
+          },
+        });
 
         // Add system message for new join
         const message = rooms.addSystemMessage(roomId, `${name} joined the room`);
@@ -107,13 +128,13 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
         }
       }
 
-      console.log(`${name} ${isRejoining ? 'rejoined' : 'joined'} room ${roomId}`);
+      console.log(`${name} ${isRejoining ? "rejoined" : "joined"} room ${roomId}`);
     });
 
     // Handle voting
     socket.on("vote", (data: { storyId: string; value: CardValue }) => {
       const info = socketToParticipant.get(socket.id);
-      if (!info) return;
+      if (!info || !data?.storyId || data.value === undefined) return;
 
       const success = rooms.submitVote(
         info.roomId,
@@ -147,52 +168,61 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
       }
     });
 
-    // Reveal votes
+    // Reveal votes (moderator only)
     socket.on("reveal", () => {
       const info = socketToParticipant.get(socket.id);
-      if (!info) return;
+      if (!info || !rooms.isParticipantModerator(info.roomId, info.participantId)) return;
 
       const result = rooms.revealVotes(info.roomId);
       if (result) {
         io.to(info.roomId).emit("votesRevealed", result);
+        // Also broadcast updated story statuses (story status changed to "revealed")
+        const state = rooms.getRoomState(info.roomId);
+        if (state) {
+          io.to(info.roomId).emit("storiesUpdated", { stories: state.stories });
+        }
       }
     });
 
-    // Reset votes
+    // Reset votes (moderator only)
     socket.on("resetVotes", () => {
       const info = socketToParticipant.get(socket.id);
-      if (!info) return;
+      if (!info || !rooms.isParticipantModerator(info.roomId, info.participantId)) return;
 
       const success = rooms.resetVotes(info.roomId);
       if (success) {
         io.to(info.roomId).emit("votesCleared");
+        const state = rooms.getRoomState(info.roomId);
+        if (state) {
+          io.to(info.roomId).emit("storiesUpdated", { stories: state.stories });
+        }
       }
     });
 
-    // Change story
+    // Change story (moderator only)
     socket.on("nextStory", (data: { storyId: string | null }) => {
       const info = socketToParticipant.get(socket.id);
-      if (!info) return;
+      if (!info || !rooms.isParticipantModerator(info.roomId, info.participantId)) return;
 
       const result = rooms.setCurrentStory(info.roomId, data.storyId);
       if (result.success) {
         io.to(info.roomId).emit("storyChanged", { storyId: data.storyId });
 
+        // Send updated state (includes votingStats if revealed)
+        const state = rooms.getRoomState(info.roomId);
+        io.to(info.roomId).emit("sync", { state });
+
         // If story has cached votes, emit them as revealed
         if (result.cachedVotes && result.cachedStats) {
           io.to(info.roomId).emit("votesRevealed", { votes: result.cachedVotes, stats: result.cachedStats });
         }
-
-        // Send updated state
-        const state = rooms.getRoomState(info.roomId);
-        io.to(info.roomId).emit("sync", { state });
       }
     });
 
     // Story management
     socket.on("addStory", (data: { story: Omit<Story, "id" | "roomId" | "createdAt"> }) => {
       const info = socketToParticipant.get(socket.id);
-      if (!info) return;
+      if (!info || !data?.story) return;
 
       const story = rooms.addStory(info.roomId, data.story);
       if (story) {
@@ -203,7 +233,7 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
 
     socket.on("updateStory", (data: { storyId: string; updates: Partial<Story> }) => {
       const info = socketToParticipant.get(socket.id);
-      if (!info) return;
+      if (!info || !data?.storyId || !data?.updates) return;
 
       const story = rooms.updateStory(info.roomId, data.storyId, data.updates);
       if (story) {
@@ -214,18 +244,26 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
 
     socket.on("deleteStory", (data: { storyId: string }) => {
       const info = socketToParticipant.get(socket.id);
-      if (!info) return;
+      if (!info || !data?.storyId) return;
+
+      const activeRoom = rooms.getRoom(info.roomId);
+      const wasCurrentStory = activeRoom?.currentStoryId === data.storyId;
 
       const success = rooms.deleteStory(info.roomId, data.storyId);
       if (success) {
         const state = rooms.getRoomState(info.roomId);
-        io.to(info.roomId).emit("storiesUpdated", { stories: state?.stories || [] });
+        if (wasCurrentStory) {
+          io.to(info.roomId).emit("storyChanged", { storyId: null });
+          io.to(info.roomId).emit("sync", { state });
+        } else {
+          io.to(info.roomId).emit("storiesUpdated", { stories: state?.stories || [] });
+        }
       }
     });
 
     socket.on("reorderStories", (data: { storyIds: string[] }) => {
       const info = socketToParticipant.get(socket.id);
-      if (!info) return;
+      if (!info || !Array.isArray(data?.storyIds)) return;
 
       const success = rooms.reorderStories(info.roomId, data.storyIds);
       if (success) {
@@ -236,7 +274,7 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
 
     socket.on("setFinalEstimate", (data: { storyId: string; value: CardValue }) => {
       const info = socketToParticipant.get(socket.id);
-      if (!info) return;
+      if (!info || !rooms.isParticipantModerator(info.roomId, info.participantId)) return;
 
       const success = rooms.setFinalEstimate(info.roomId, data.storyId, data.value);
       if (success) {
@@ -248,7 +286,7 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
     // Chat
     socket.on("chat", (data: { content: string }) => {
       const info = socketToParticipant.get(socket.id);
-      if (!info) return;
+      if (!info || !data?.content) return;
 
       const message = rooms.addChatMessage(info.roomId, info.participantId, data.content);
       if (message) {
@@ -256,10 +294,10 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
       }
     });
 
-    // Timer
+    // Timer (moderator only)
     socket.on("startTimer", () => {
       const info = socketToParticipant.get(socket.id);
-      if (!info) return;
+      if (!info || !rooms.isParticipantModerator(info.roomId, info.participantId)) return;
 
       const endsAt = rooms.startTimer(
         info.roomId,
@@ -278,7 +316,7 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
 
     socket.on("pauseTimer", () => {
       const info = socketToParticipant.get(socket.id);
-      if (!info) return;
+      if (!info || !rooms.isParticipantModerator(info.roomId, info.participantId)) return;
 
       const remaining = rooms.pauseTimer(info.roomId);
       if (remaining !== null) {
@@ -288,7 +326,7 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
 
     socket.on("resetTimer", () => {
       const info = socketToParticipant.get(socket.id);
-      if (!info) return;
+      if (!info || !rooms.isParticipantModerator(info.roomId, info.participantId)) return;
 
       const success = rooms.resetTimer(info.roomId);
       if (success) {
@@ -296,10 +334,10 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
       }
     });
 
-    // Settings
+    // Settings (moderator only)
     socket.on("updateSettings", (data: { settings: Partial<RoomSettings> }) => {
       const info = socketToParticipant.get(socket.id);
-      if (!info) return;
+      if (!info || !rooms.isParticipantModerator(info.roomId, info.participantId)) return;
 
       const settings = rooms.updateSettings(info.roomId, data.settings);
       if (settings) {
@@ -310,22 +348,81 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
     // Moderator actions
     socket.on("kickParticipant", (data: { participantId: string }) => {
       const info = socketToParticipant.get(socket.id);
-      if (!info) return;
+      if (
+        !info ||
+        !data?.participantId ||
+        data.participantId === info.participantId ||
+        !rooms.isParticipantModerator(info.roomId, info.participantId)
+      ) {
+        return;
+      }
+
+      const activeRoom = rooms.getRoom(info.roomId);
+      const targetParticipant = activeRoom?.participants.get(data.participantId);
 
       const success = rooms.kickParticipant(info.roomId, data.participantId);
       if (success) {
+        // Notify and remove kicked participant's socket(s) from the room
+        for (const [sockId, sockInfo] of socketToParticipant.entries()) {
+          if (sockInfo.roomId === info.roomId && sockInfo.participantId === data.participantId) {
+            const targetSocket = io.sockets.sockets.get(sockId);
+            if (targetSocket) {
+              targetSocket.emit("kicked");
+              targetSocket.leave(info.roomId);
+            }
+            socketToParticipant.delete(sockId);
+          }
+        }
+
         io.to(info.roomId).emit("participantLeft", { participantId: data.participantId });
+
+        if (targetParticipant) {
+          const message = rooms.addSystemMessage(
+            info.roomId,
+            `${targetParticipant.name} was removed from the room`
+          );
+          if (message) {
+            io.to(info.roomId).emit("chatMessage", { message });
+          }
+        }
       }
     });
 
     socket.on("promoteModerator", (data: { participantId: string }) => {
       const info = socketToParticipant.get(socket.id);
-      if (!info) return;
+      if (
+        !info ||
+        !data?.participantId ||
+        !rooms.isParticipantModerator(info.roomId, info.participantId)
+      ) {
+        return;
+      }
 
       const success = rooms.promoteModerator(info.roomId, data.participantId);
       if (success) {
-        const state = rooms.getRoomState(info.roomId);
-        io.to(info.roomId).emit("sync", { state });
+        const activeRoom = rooms.getRoom(info.roomId);
+        const promoted = activeRoom?.participants.get(data.participantId);
+
+        for (const [sockId, sockInfo] of socketToParticipant.entries()) {
+          if (sockInfo.roomId === info.roomId) {
+            const targetSocket = io.sockets.sockets.get(sockId);
+            if (targetSocket) {
+              targetSocket.emit("sync", {
+                state: rooms.getRoomState(info.roomId, sockInfo.participantId),
+              });
+            }
+          }
+        }
+
+        if (promoted) {
+          const message = rooms.addSystemMessage(
+            info.roomId,
+            `${promoted.name} is now the moderator`
+          );
+          if (message) {
+            io.to(info.roomId).emit("chatMessage", { message });
+          }
+        }
       }
     });
 
@@ -344,7 +441,13 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
       );
 
       if (participant) {
-        io.to(info.roomId).emit("participantUpdated", { participant });
+        const state = rooms.getRoomState(info.roomId);
+        io.to(info.roomId).emit("participantUpdated", {
+          participant: {
+            ...participant,
+            currentVote: state?.votingRound?.status === "revealed" ? participant.currentVote : undefined,
+          },
+        });
       }
 
       // Remove from tracking after timeout (allow reconnection)
@@ -358,8 +461,20 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
           if (p && p.connectionStatus === "disconnected") {
             rooms.removeParticipant(currentInfo.roomId, currentInfo.participantId);
             io.to(currentInfo.roomId).emit("participantLeft", {
-              participantId: currentInfo.participantId
+              participantId: currentInfo.participantId,
             });
+
+            // Sync moderator state in case disconnected user was moderator
+            const updatedState = rooms.getRoomState(currentInfo.roomId);
+            if (updatedState) {
+              for (const pUpdated of updatedState.participants) {
+                if (pUpdated.isModerator) {
+                  io.to(currentInfo.roomId).emit("participantUpdated", {
+                    participant: pUpdated,
+                  });
+                }
+              }
+            }
 
             // Add system message
             const message = rooms.addSystemMessage(

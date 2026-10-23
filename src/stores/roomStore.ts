@@ -6,7 +6,6 @@ import type {
   VotingRound,
   ChatMessage,
   TimerState,
-  CardValue,
   RoomState,
   Vote,
   VotingStats,
@@ -49,6 +48,7 @@ interface RoomStore {
 
   // Voting actions
   setVoteReceived: (participantId: string) => void;
+  setVoteCleared: (participantId: string) => void;
   revealVotes: (votes: Vote[], stats: VotingStats) => void;
   clearVotes: () => void;
   setCurrentStory: (storyId: string | null) => void;
@@ -92,7 +92,7 @@ const initialState = {
   isStoriesOpen: true,
 };
 
-export const useRoomStore = create<RoomStore>((set, get) => ({
+export const useRoomStore = create<RoomStore>((set) => ({
   ...initialState,
 
   setConnectionState: (isConnected, isConnecting, error = null) =>
@@ -105,6 +105,7 @@ export const useRoomStore = create<RoomStore>((set, get) => ({
       stories: state.stories,
       currentStoryId: state.currentStoryId,
       votingRound: state.votingRound,
+      votingStats: state.votingStats ?? null,
       chatMessages: state.chatMessages,
       timer: state.timer,
     }),
@@ -114,7 +115,9 @@ export const useRoomStore = create<RoomStore>((set, get) => ({
 
   addParticipant: (participant) =>
     set((state) => ({
-      participants: [...state.participants, participant],
+      participants: state.participants.some((p) => p.id === participant.id)
+        ? state.participants.map((p) => (p.id === participant.id ? participant : p))
+        : [...state.participants, participant],
     })),
 
   removeParticipant: (participantId) =>
@@ -136,13 +139,22 @@ export const useRoomStore = create<RoomStore>((set, get) => ({
       ),
     })),
 
+  setVoteCleared: (participantId) =>
+    set((state) => ({
+      participants: state.participants.map((p) =>
+        p.id === participantId
+          ? { ...p, hasVoted: false, currentVote: undefined }
+          : p
+      ),
+    })),
+
   revealVotes: (votes, stats) =>
     set((state) => {
       // Update participants with their revealed votes
       const voteMap = new Map(votes.map((v) => [v.participantId, v.value]));
       const updatedParticipants = state.participants.map((p) => ({
         ...p,
-        currentVote: voteMap.get(p.id) ?? null,
+        currentVote: voteMap.get(p.id) ?? undefined,
       }));
 
       return {
@@ -175,6 +187,7 @@ export const useRoomStore = create<RoomStore>((set, get) => ({
   setCurrentStory: (storyId) =>
     set((state) => ({
       currentStoryId: storyId,
+      votingStats: null,
       // Reset voting state when changing stories
       votingRound: storyId
         ? {
@@ -199,10 +212,10 @@ export const useRoomStore = create<RoomStore>((set, get) => ({
     })),
 
   startTimer: (endsAt) =>
-    set((state) => ({
+    set(() => ({
       timer: {
         isRunning: true,
-        remaining: Math.ceil((endsAt.getTime() - Date.now()) / 1000),
+        remaining: Math.max(0, Math.ceil((endsAt.getTime() - Date.now()) / 1000)),
         endsAt,
       },
     })),

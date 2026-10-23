@@ -1,20 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import type { DeckType, RoomSettings, CardValue } from "@/types";
 import * as roomManager from "../../../../server/rooms";
-
-// Re-export roomsStore for backward compatibility during transition
-export const roomsStore = new Map<
-  string,
-  {
-    id: string;
-    name: string;
-    deckType: DeckType;
-    customDeck?: CardValue[];
-    settings: RoomSettings;
-    createdAt: Date;
-    createdBy: string;
-  }
->();
 
 export async function POST(request: NextRequest) {
   try {
@@ -28,25 +13,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create room in room manager
+    // Create room in room manager (persists to DB if configured)
     const room = roomManager.createRoom({
       id,
-      name,
+      name: String(name).trim().slice(0, 100),
       deckType,
       customDeck,
       settings,
       createdBy: "anonymous",
-    });
-
-    // Also store in local map for API access
-    roomsStore.set(id, {
-      id: room.id,
-      name: room.name,
-      deckType: room.deckType as DeckType,
-      customDeck: room.customDeck,
-      settings: room.settings,
-      createdAt: room.createdAt,
-      createdBy: room.createdBy,
     });
 
     return NextResponse.json({ room }, { status: 201 });
@@ -70,20 +44,18 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // Try room manager first
+  // Hydrate from DB if not in memory
+  if (!roomManager.getRoom(roomId)) {
+    await roomManager.hydrateRoomFromDb(roomId);
+  }
+
   const roomState = roomManager.getRoomState(roomId);
   if (roomState) {
     return NextResponse.json({ room: roomState.room });
   }
 
-  // Fall back to local store
-  const room = roomsStore.get(roomId);
-  if (!room) {
-    return NextResponse.json(
-      { error: "Room not found" },
-      { status: 404 }
-    );
-  }
-
-  return NextResponse.json({ room });
+  return NextResponse.json(
+    { error: "Room not found" },
+    { status: 404 }
+  );
 }

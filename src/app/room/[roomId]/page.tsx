@@ -4,9 +4,24 @@ import { useEffect, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import { Settings } from "lucide-react";
+import {
+  Settings,
+  Download,
+  Pencil,
+  Trash2,
+  ArrowUp,
+  ArrowDown,
+  RotateCcw,
+  MoreVertical,
+  UserX,
+} from "lucide-react";
 import { useSocket } from "@/hooks/useSocket";
-import { useRoomStore, selectCurrentStory, selectIsCurrentUserModerator } from "@/stores/roomStore";
+import {
+  useRoomStore,
+  selectCurrentStory,
+  selectIsCurrentUserModerator,
+  selectCurrentParticipant,
+} from "@/stores/roomStore";
 import { CardDeck } from "@/components/room/voting/CardDeck";
 import { VoteCard } from "@/components/room/voting/EstimateCard";
 import { SettingsDialog } from "@/components/settings-dialog";
@@ -23,9 +38,15 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { getDeck } from "@/lib/constants/decks";
 import { cn } from "@/lib/utils";
-import type { CardValue } from "@/types";
+import type { CardValue, Story } from "@/types";
 
 export default function RoomPage() {
   const params = useParams();
@@ -42,6 +63,15 @@ export default function RoomPage() {
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [importText, setImportText] = useState("");
   const [showSettings, setShowSettings] = useState(false);
+
+  // Edit story dialog state
+  const [editingStory, setEditingStory] = useState<Story | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+
+  // Unread chat tracking
+  const [lastSeenChatCount, setLastSeenChatCount] = useState(0);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
 
   const {
     isConnecting,
@@ -63,22 +93,28 @@ export default function RoomPage() {
 
   const currentStory = useRoomStore(selectCurrentStory);
   const isModerator = useRoomStore(selectIsCurrentUserModerator);
+  const currentParticipant = useRoomStore(selectCurrentParticipant);
 
   const {
     connect,
     vote,
+    clearVote,
     reveal,
     resetVotes,
     nextStory,
     addStory,
+    updateStory,
+    deleteStory,
+    reorderStories,
     setFinalEstimate,
     sendChat,
     startTimer,
     pauseTimer,
+    resetTimer,
+    changeSettings,
+    kickParticipant,
+    promoteModerator,
   } = useSocket(roomId);
-
-  // Track previous story ID to detect changes
-  const prevStoryIdRef = useRef<string | null>(null);
 
   // Check for saved participant info on mount
   const savedNameRef = useRef<string | null>(null);
@@ -93,21 +129,34 @@ export default function RoomPage() {
     if (savedNameRef.current && !joinName) {
       setJoinName(savedNameRef.current);
     }
-    // Load saved participant ID into the store so it gets reused on reconnection
     if (savedIdRef.current && !participantId) {
-      useRoomStore.getState().setParticipant(savedIdRef.current, savedNameRef.current || "");
+      useRoomStore
+        .getState()
+        .setParticipant(savedIdRef.current, savedNameRef.current || "");
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Reset selected card when story changes
-  if (prevStoryIdRef.current !== currentStoryId) {
-    prevStoryIdRef.current = currentStoryId;
-    if (selectedCard !== undefined) {
-      // Use setTimeout to avoid setting state during render
-      setTimeout(() => setSelectedCard(undefined), 0);
+  // Sync selectedCard with currentStoryId and participant's vote state
+  useEffect(() => {
+    if (!currentStoryId || !currentParticipant?.hasVoted) {
+      setSelectedCard(undefined);
+    } else if (currentParticipant.currentVote !== undefined) {
+      setSelectedCard(currentParticipant.currentVote);
     }
-  }
+  }, [currentStoryId, currentParticipant?.hasVoted, currentParticipant?.currentVote]);
+
+  // Auto-scroll chat & reset unread counter when chat is open
+  useEffect(() => {
+    if (isChatOpen) {
+      setLastSeenChatCount(chatMessages.length);
+      chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [isChatOpen, chatMessages.length]);
+
+  const unreadChatCount = isChatOpen
+    ? 0
+    : Math.max(0, chatMessages.length - lastSeenChatCount);
 
   const handleJoin = () => {
     if (!joinName.trim()) return;
@@ -117,6 +166,18 @@ export default function RoomPage() {
 
   const handleVote = (card: CardValue) => {
     if (!currentStoryId || votingRound?.status === "revealed") return;
+
+    // Clicking the already selected card clears the vote (if revoting is allowed)
+    if (selectedCard === card && room?.settings.allowRevote !== false) {
+      setSelectedCard(undefined);
+      clearVote();
+      return;
+    }
+
+    if (currentParticipant?.hasVoted && room?.settings.allowRevote === false) {
+      return;
+    }
+
     setSelectedCard(card);
     vote(currentStoryId, card);
   };
@@ -154,7 +215,36 @@ export default function RoomPage() {
     setShowImportDialog(false);
   };
 
+  const handleOpenEditStory = (story: Story) => {
+    setEditingStory(story);
+    setEditTitle(story.title);
+    setEditDescription(story.description || "");
+  };
+
+  const handleSaveEditStory = () => {
+    if (!editingStory || !editTitle.trim()) return;
+    updateStory(editingStory.id, {
+      title: editTitle.trim(),
+      description: editDescription.trim() || undefined,
+    });
+    setEditingStory(null);
+  };
+
+  const handleMoveStory = (index: number, direction: "up" | "down") => {
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= stories.length) return;
+    const ids = stories.map((s) => s.id);
+    const [moved] = ids.splice(index, 1);
+    ids.splice(targetIndex, 0, moved);
+    reorderStories(ids);
+  };
+
+  const handleExport = (format: "csv" | "json") => {
+    window.open(`/api/rooms/${roomId}/export?format=${format}`, "_blank");
+  };
+
   const handleSelectStory = (storyId: string) => {
+    if (!isModerator) return;
     nextStory(storyId);
   };
 
@@ -286,8 +376,16 @@ export default function RoomPage() {
             <Button variant="ghost" size="sm" onClick={toggleStories}>
               Stories ({stories.length})
             </Button>
-            <Button variant="ghost" size="sm" onClick={toggleChat}>
+            <Button variant="ghost" size="sm" onClick={toggleChat} className="relative">
               Chat
+              {unreadChatCount > 0 && (
+                <Badge
+                  variant="default"
+                  className="ml-1.5 h-5 min-w-5 px-1 text-[10px] flex items-center justify-center"
+                >
+                  {unreadChatCount}
+                </Badge>
+              )}
             </Button>
             <Button
               variant="ghost"
@@ -307,13 +405,33 @@ export default function RoomPage() {
           {isStoriesOpen && (
             <motion.aside
               initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 300, opacity: 1 }}
+              animate={{ width: 320, opacity: 1 }}
               exit={{ width: 0, opacity: 0 }}
               className="border-r bg-muted/30 overflow-hidden"
             >
-              <div className="w-[300px] h-full flex flex-col">
+              <div className="w-[320px] h-full flex flex-col">
                 <div className="p-4 border-b">
-                  <h2 className="font-semibold mb-3">Stories</h2>
+                  <div className="flex items-center justify-between mb-3">
+                    <h2 className="font-semibold">Stories</h2>
+                    {stories.length > 0 && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs">
+                            <Download className="w-3.5 h-3.5 mr-1" />
+                            Export
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => handleExport("csv")}>
+                            Export as CSV
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleExport("json")}>
+                            Export as JSON
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+                  </div>
                   <div className="flex flex-col gap-2">
                     <textarea
                       placeholder="Add a story..."
@@ -340,41 +458,110 @@ export default function RoomPage() {
                 </div>
                 <ScrollArea className="flex-1">
                   <div className="p-2 space-y-1">
-                    {stories.map((story) => (
-                      <button
-                        key={story.id}
-                        onClick={() => handleSelectStory(story.id)}
-                        className={cn(
-                          "w-full text-left p-3 rounded-lg transition-colors",
-                          currentStoryId === story.id
-                            ? "bg-primary text-primary-foreground"
-                            : "hover:bg-muted"
-                        )}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <span className="font-medium text-sm break-words whitespace-pre-wrap" style={{ wordBreak: "break-word" }}>
-                            {story.title}
-                          </span>
-                          {story.finalEstimate !== undefined && (
-                            <Badge variant="outline" className="shrink-0">
-                              {story.finalEstimate}
-                            </Badge>
+                    {stories.map((story, idx) => {
+                      const isSelected = currentStoryId === story.id;
+                      return (
+                        <div
+                          key={story.id}
+                          onClick={() => handleSelectStory(story.id)}
+                          className={cn(
+                            "group w-full text-left p-3 rounded-lg transition-colors relative",
+                            isModerator ? "cursor-pointer" : "cursor-default",
+                            isSelected
+                              ? "bg-primary text-primary-foreground"
+                              : "hover:bg-muted"
                           )}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <span
+                              className="font-medium text-sm break-words whitespace-pre-wrap flex-1"
+                              style={{ wordBreak: "break-word" }}
+                            >
+                              {story.title}
+                            </span>
+                            <div className="flex items-center gap-1 shrink-0">
+                              {story.finalEstimate !== undefined && story.finalEstimate !== null && (
+                                <Badge
+                                  variant={isSelected ? "secondary" : "outline"}
+                                  className="shrink-0"
+                                >
+                                  {story.finalEstimate}
+                                </Badge>
+                              )}
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className={cn(
+                                      "p-1 rounded opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity",
+                                      isSelected
+                                        ? "hover:bg-primary-foreground/20 text-primary-foreground"
+                                        : "hover:bg-background text-muted-foreground"
+                                    )}
+                                    aria-label="Story actions"
+                                  >
+                                    <MoreVertical className="w-3.5 h-3.5" />
+                                  </button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent
+                                  align="end"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <DropdownMenuItem onClick={() => handleOpenEditStory(story)}>
+                                    <Pencil className="w-4 h-4 mr-2" />
+                                    Edit Story
+                                  </DropdownMenuItem>
+                                  {idx > 0 && (
+                                    <DropdownMenuItem onClick={() => handleMoveStory(idx, "up")}>
+                                      <ArrowUp className="w-4 h-4 mr-2" />
+                                      Move Up
+                                    </DropdownMenuItem>
+                                  )}
+                                  {idx < stories.length - 1 && (
+                                    <DropdownMenuItem onClick={() => handleMoveStory(idx, "down")}>
+                                      <ArrowDown className="w-4 h-4 mr-2" />
+                                      Move Down
+                                    </DropdownMenuItem>
+                                  )}
+                                  <DropdownMenuItem
+                                    onClick={() => deleteStory(story.id)}
+                                    className="text-destructive focus:text-destructive"
+                                  >
+                                    <Trash2 className="w-4 h-4 mr-2" />
+                                    Delete Story
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </div>
+                          </div>
+                          {story.description && (
+                            <p
+                              className={cn(
+                                "text-xs mt-1 line-clamp-2",
+                                isSelected
+                                  ? "text-primary-foreground/80"
+                                  : "text-muted-foreground"
+                              )}
+                            >
+                              {story.description}
+                            </p>
+                          )}
+                          <div className="flex items-center gap-2 mt-1">
+                            <span
+                              className={cn(
+                                "text-xs capitalize",
+                                isSelected
+                                  ? "text-primary-foreground/80"
+                                  : "text-muted-foreground"
+                              )}
+                            >
+                              {story.status}
+                            </span>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span
-                            className={cn(
-                              "text-xs",
-                              currentStoryId === story.id
-                                ? "text-primary-foreground/80"
-                                : "text-muted-foreground"
-                            )}
-                          >
-                            {story.status}
-                          </span>
-                        </div>
-                      </button>
-                    ))}
+                      );
+                    })}
                     {stories.length === 0 && (
                       <p className="text-sm text-muted-foreground text-center py-8">
                         No stories yet. Add one to start voting!
@@ -395,14 +582,16 @@ export default function RoomPage() {
               <div className="max-w-2xl mx-auto text-center">
                 <h2 className="text-xl font-semibold">{currentStory.title}</h2>
                 {currentStory.description && (
-                  <p className="text-muted-foreground mt-1">
+                  <p className="text-muted-foreground mt-1 whitespace-pre-wrap">
                     {currentStory.description}
                   </p>
                 )}
               </div>
             ) : (
               <div className="max-w-2xl mx-auto text-center text-muted-foreground">
-                Select a story to start voting
+                {isModerator
+                  ? "Select a story from the sidebar to start voting"
+                  : "Waiting for the moderator to select a story..."}
               </div>
             )}
           </div>
@@ -420,12 +609,36 @@ export default function RoomPage() {
                     isRevealed={isRevealed}
                     participantName={p.name}
                     isCurrentUser={p.id === participantId}
+                    isModerator={p.isModerator}
+                    connectionStatus={p.connectionStatus}
+                    canManage={isModerator}
+                    onPromote={() => promoteModerator(p.id)}
+                    onKick={() => kickParticipant(p.id)}
                   />
                 ))}
               </div>
               {spectators.length > 0 && (
-                <div className="mt-4 text-center text-sm text-muted-foreground">
-                  Spectators: {spectators.map((s) => s.name).join(", ")}
+                <div className="mt-4 flex flex-wrap items-center justify-center gap-2 text-sm text-muted-foreground">
+                  <span>Spectators:</span>
+                  {spectators.map((s) => (
+                    <span
+                      key={s.id}
+                      className="inline-flex items-center gap-1 bg-muted px-2 py-0.5 rounded text-xs"
+                    >
+                      {s.name}
+                      {isModerator && s.id !== participantId && (
+                        <button
+                          type="button"
+                          onClick={() => kickParticipant(s.id)}
+                          className="hover:text-destructive ml-1"
+                          title={`Remove ${s.name}`}
+                          aria-label={`Remove ${s.name}`}
+                        >
+                          <UserX className="w-3 h-3" />
+                        </button>
+                      )}
+                    </span>
+                  ))}
                 </div>
               )}
             </div>
@@ -447,37 +660,53 @@ export default function RoomPage() {
 
             {/* Moderator Controls */}
             {isModerator && currentStory && (
-              <div className="flex gap-2 mb-6">
+              <div className="flex flex-wrap items-center justify-center gap-2 mb-6">
                 {!isRevealed ? (
                   <>
-                    <Button onClick={handleReveal} disabled={votingParticipants.every((p) => !p.hasVoted)}>
+                    <Button
+                      onClick={handleReveal}
+                      disabled={votingParticipants.every((p) => !p.hasVoted)}
+                    >
                       Reveal Votes
                     </Button>
                     {room.settings.timerEnabled && (
                       <>
                         {!timer?.isRunning ? (
                           <Button variant="outline" onClick={startTimer}>
-                            Start Timer
+                            {timer && timer.remaining > 0 && timer.remaining < room.settings.timerDuration
+                              ? "Resume Timer"
+                              : "Start Timer"}
                           </Button>
                         ) : (
                           <Button variant="outline" onClick={pauseTimer}>
                             Pause
                           </Button>
                         )}
+                        {timer && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={resetTimer}
+                            title="Reset Timer"
+                            aria-label="Reset Timer"
+                          >
+                            <RotateCcw className="w-4 h-4" />
+                          </Button>
+                        )}
                       </>
                     )}
                   </>
                 ) : (
-                  <>
+                  <div className="flex flex-col sm:flex-row items-center gap-3">
                     <Button onClick={handleResetVotes}>Vote Again</Button>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-muted-foreground">Final:</span>
-                      {deck.slice(0, 8).map((card) => (
+                    <div className="flex flex-wrap items-center justify-center gap-1.5">
+                      <span className="text-sm text-muted-foreground mr-1">Final:</span>
+                      {deck.map((card) => (
                         <button
                           key={String(card)}
                           onClick={() => setFinalEstimate(currentStory.id, card)}
                           className={cn(
-                            "w-8 h-10 rounded border-2 text-xs font-semibold transition-colors",
+                            "min-w-8 h-10 px-2 rounded border-2 text-xs font-semibold transition-colors",
                             currentStory.finalEstimate === card
                               ? "border-primary bg-primary text-primary-foreground"
                               : "border-border hover:border-primary/50"
@@ -487,17 +716,20 @@ export default function RoomPage() {
                         </button>
                       ))}
                     </div>
-                  </>
+                  </div>
                 )}
               </div>
             )}
 
             {/* Card Deck for voting */}
-            {currentStory && !isSpectator && votingRound?.status !== "revealed" && (
+            {currentStory && !currentParticipant?.isSpectator && votingRound?.status !== "revealed" && (
               <CardDeck
                 cards={deck}
                 selectedCard={selectedCard}
                 onSelectCard={handleVote}
+                disabled={
+                  Boolean(currentParticipant?.hasVoted && !room.settings.allowRevote)
+                }
                 className="max-w-3xl"
               />
             )}
@@ -511,22 +743,28 @@ export default function RoomPage() {
               >
                 {/* Voting Statistics */}
                 {votingStats && room.settings.showAverage && (
-                  <div className="flex justify-center gap-6">
+                  <div className="flex flex-wrap justify-center gap-6">
                     {votingStats.average !== null && (
                       <div className="text-center">
-                        <div className="text-2xl font-bold text-primary">{votingStats.average.toFixed(1)}</div>
+                        <div className="text-2xl font-bold text-primary">
+                          {votingStats.average.toFixed(1)}
+                        </div>
                         <div className="text-xs text-muted-foreground">Average</div>
                       </div>
                     )}
                     {votingStats.median !== null && (
                       <div className="text-center">
-                        <div className="text-2xl font-bold text-primary">{votingStats.median}</div>
+                        <div className="text-2xl font-bold text-primary">
+                          {votingStats.median}
+                        </div>
                         <div className="text-xs text-muted-foreground">Median</div>
                       </div>
                     )}
                     {votingStats.mode.length > 0 && (
                       <div className="text-center">
-                        <div className="text-2xl font-bold text-primary">{votingStats.mode.join(", ")}</div>
+                        <div className="text-2xl font-bold text-primary">
+                          {votingStats.mode.join(", ")}
+                        </div>
                         <div className="text-xs text-muted-foreground">Most Common</div>
                       </div>
                     )}
@@ -539,7 +777,9 @@ export default function RoomPage() {
                   </div>
                 )}
                 <p className="text-muted-foreground">
-                  {isModerator ? "Select a final estimate above." : "Waiting for moderator..."}
+                  {isModerator
+                    ? "Select a final estimate above."
+                    : "Waiting for moderator..."}
                 </p>
               </motion.div>
             )}
@@ -572,11 +812,12 @@ export default function RoomPage() {
                             <span className="text-xs font-medium text-primary">
                               {msg.participantName}
                             </span>
-                            <p className="text-sm">{msg.content}</p>
+                            <p className="text-sm break-words">{msg.content}</p>
                           </div>
                         )}
                       </div>
                     ))}
+                    <div ref={chatEndRef} />
                   </div>
                 </ScrollArea>
                 <div className="p-4 border-t">
@@ -599,6 +840,49 @@ export default function RoomPage() {
           )}
         </AnimatePresence>
       </div>
+
+      {/* Edit Story Dialog */}
+      <Dialog
+        open={Boolean(editingStory)}
+        onOpenChange={(open) => !open && setEditingStory(null)}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Story</DialogTitle>
+            <DialogDescription>
+              Update the story title or add a description.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium">Title</label>
+              <Input
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                placeholder="Story title"
+                autoFocus
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium">Description (optional)</label>
+              <textarea
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                placeholder="Acceptance criteria, notes, links..."
+                className="flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 resize-none"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setEditingStory(null)}>
+                Cancel
+              </Button>
+              <Button onClick={handleSaveEditStory} disabled={!editTitle.trim()}>
+                Save Changes
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Import Stories Dialog */}
       <Dialog open={showImportDialog} onOpenChange={setShowImportDialog}>
@@ -635,7 +919,13 @@ export default function RoomPage() {
       </Dialog>
 
       {/* Settings Dialog */}
-      <SettingsDialog open={showSettings} onOpenChange={setShowSettings} />
+      <SettingsDialog
+        open={showSettings}
+        onOpenChange={setShowSettings}
+        roomSettings={room.settings}
+        isModerator={isModerator}
+        onUpdateRoomSettings={changeSettings}
+      />
     </div>
   );
 }
