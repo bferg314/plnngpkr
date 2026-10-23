@@ -10,9 +10,15 @@ import type {
   CardValue,
   RoomSettings,
   VotingStats,
+  DeckType,
 } from "../src/types";
 import { calculateVotingStats } from "../src/lib/utils/statistics";
+import { db, rooms as roomsTable, stories as storiesTable, voteHistory as voteHistoryTable } from "../src/lib/db";
+import { eq, asc } from "drizzle-orm";
 import { nanoid } from "nanoid";
+
+// Room TTL when empty (1 hour)
+const ROOM_EMPTY_TTL_MS = 60 * 60 * 1000;
 
 // In-memory store for active room states
 // Using globalThis to ensure singleton across module reloads in development
@@ -20,7 +26,7 @@ const globalStore = globalThis as typeof globalThis & {
   __plnngpkr_rooms?: Map<string, ActiveRoom>;
 };
 
-interface ActiveRoom {
+export interface ActiveRoom {
   room: Room;
   participants: Map<string, Participant>;
   stories: Story[];
@@ -29,6 +35,7 @@ interface ActiveRoom {
   chatMessages: ChatMessage[];
   timer: TimerState | null;
   timerInterval?: NodeJS.Timeout;
+  cleanupTimeout?: NodeJS.Timeout;
 }
 
 // Initialize the global store if it doesn't exist
@@ -38,6 +45,183 @@ if (!globalStore.__plnngpkr_rooms) {
 
 // Use the global store for room state
 const activeRooms = globalStore.__plnngpkr_rooms;
+
+// --- Database Persistence Helpers (Non-blocking with graceful fallback) ---
+
+async function persistRoomToDb(room: Room): Promise<void> {
+  if (!db) return;
+  try {
+    await db
+      .insert(roomsTable)
+      .values({
+        id: room.id,
+        name: room.name,
+        deckType: room.deckType,
+        customDeck: room.customDeck ?? null,
+        settings: room.settings,
+        status: "active",
+        createdBy: room.createdBy,
+        createdAt: room.createdAt,
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: roomsTable.id,
+        set: {
+          name: room.name,
+          deckType: room.deckType,
+          customDeck: room.customDeck ?? null,
+          settings: room.settings,
+          updatedAt: new Date(),
+        },
+      });
+  } catch (err) {
+    console.warn("[rooms] Failed to persist room to database:", err);
+  }
+}
+
+async function persistStoryToDb(story: Story): Promise<void> {
+  if (!db) return;
+  try {
+    await db
+      .insert(storiesTable)
+      .values({
+        id: story.id,
+        roomId: story.roomId,
+        title: story.title,
+        description: story.description ?? null,
+        order: story.order,
+        status: story.status,
+        finalEstimate: story.finalEstimate ?? null,
+        cachedVotes: story.cachedVotes ?? null,
+        cachedStats: story.cachedStats ?? null,
+        createdAt: story.createdAt,
+        estimatedAt: story.estimatedAt ?? null,
+      })
+      .onConflictDoUpdate({
+        target: storiesTable.id,
+        set: {
+          title: story.title,
+          description: story.description ?? null,
+          order: story.order,
+          status: story.status,
+          finalEstimate: story.finalEstimate ?? null,
+          cachedVotes: story.cachedVotes ?? null,
+          cachedStats: story.cachedStats ?? null,
+          estimatedAt: story.estimatedAt ?? null,
+        },
+      });
+  } catch (err) {
+    console.warn("[rooms] Failed to persist story to database:", err);
+  }
+}
+
+async function deleteStoryFromDb(storyId: string): Promise<void> {
+  if (!db) return;
+  try {
+    await db.delete(storiesTable).where(eq(storiesTable.id, storyId));
+  } catch (err) {
+    console.warn("[rooms] Failed to delete story from database:", err);
+  }
+}
+
+async function persistVotesToDb(roomId: string, votes: Vote[]): Promise<void> {
+  if (!db || votes.length === 0) return;
+  try {
+    await db.insert(voteHistoryTable).values(
+      votes.map((v) => ({
+        id: nanoid(),
+        roomId,
+        storyId: v.storyId,
+        participantId: v.participantId,
+        participantName: v.participantName,
+        value: v.value,
+        votedAt: v.timestamp,
+      }))
+    );
+  } catch (err) {
+    console.warn("[rooms] Failed to persist vote history to database:", err);
+  }
+}
+
+export async function hydrateRoomFromDb(roomId: string): Promise<ActiveRoom | undefined> {
+  const existing = activeRooms.get(roomId);
+  if (existing) return existing;
+  if (!db) return undefined;
+
+  try {
+    const [dbRoom] = await db
+      .select()
+      .from(roomsTable)
+      .where(eq(roomsTable.id, roomId))
+      .limit(1);
+
+    if (!dbRoom) return undefined;
+
+    const dbStories = await db
+      .select()
+      .from(storiesTable)
+      .where(eq(storiesTable.roomId, roomId))
+      .orderBy(asc(storiesTable.order));
+
+    const room: Room = {
+      id: dbRoom.id,
+      name: dbRoom.name,
+      deckType: dbRoom.deckType as DeckType,
+      customDeck: (dbRoom.customDeck as CardValue[] | null) ?? undefined,
+      settings: dbRoom.settings as RoomSettings,
+      createdAt: dbRoom.createdAt,
+      createdBy: dbRoom.createdBy,
+    };
+
+    const stories: Story[] = dbStories.map((s) => ({
+      id: s.id,
+      roomId: s.roomId,
+      title: s.title,
+      description: s.description ?? undefined,
+      order: s.order,
+      status: (s.status as Story["status"]) || "pending",
+      finalEstimate: (s.finalEstimate as CardValue) ?? undefined,
+      createdAt: s.createdAt,
+      estimatedAt: s.estimatedAt ?? undefined,
+      cachedVotes: (s.cachedVotes as Vote[] | null) ?? undefined,
+      cachedStats: (s.cachedStats as VotingStats | null) ?? undefined,
+    }));
+
+    const activeRoom: ActiveRoom = {
+      room,
+      participants: new Map(),
+      stories,
+      currentStoryId: null,
+      votingRound: null,
+      chatMessages: [],
+      timer: null,
+    };
+
+    scheduleRoomCleanup(roomId, activeRoom);
+    activeRooms.set(roomId, activeRoom);
+    return activeRoom;
+  } catch (err) {
+    console.warn("[rooms] Failed to hydrate room from database:", err);
+    return undefined;
+  }
+}
+
+function scheduleRoomCleanup(roomId: string, activeRoom: ActiveRoom, ttlMs = ROOM_EMPTY_TTL_MS): void {
+  if (activeRoom.cleanupTimeout) {
+    clearTimeout(activeRoom.cleanupTimeout);
+  }
+  activeRoom.cleanupTimeout = setTimeout(() => {
+    if (activeRoom.participants.size === 0) {
+      if (activeRoom.timerInterval) {
+        clearInterval(activeRoom.timerInterval);
+      }
+      activeRooms.delete(roomId);
+    }
+  }, ttlMs);
+  if (typeof activeRoom.cleanupTimeout.unref === "function") {
+    activeRoom.cleanupTimeout.unref();
+  }
+}
 
 export function createRoom(roomData: Omit<Room, "createdAt">): Room {
   const room: Room = {
@@ -55,13 +239,33 @@ export function createRoom(roomData: Omit<Room, "createdAt">): Room {
     timer: null,
   };
 
+  scheduleRoomCleanup(room.id, activeRoom);
   activeRooms.set(room.id, activeRoom);
+  void persistRoomToDb(room);
   return room;
 }
 
+export function deleteRoom(roomId: string): boolean {
+  const activeRoom = activeRooms.get(roomId);
+  if (!activeRoom) return false;
+  if (activeRoom.timerInterval) {
+    clearInterval(activeRoom.timerInterval);
+  }
+  if (activeRoom.cleanupTimeout) {
+    clearTimeout(activeRoom.cleanupTimeout);
+  }
+  return activeRooms.delete(roomId);
+}
+
 export function getRoom(roomId: string): ActiveRoom | undefined {
-  console.log(`[rooms] getRoom(${roomId}), total rooms: ${activeRooms.size}, exists: ${activeRooms.has(roomId)}`);
   return activeRooms.get(roomId);
+}
+
+export function isParticipantModerator(roomId: string, participantId: string): boolean {
+  const activeRoom = activeRooms.get(roomId);
+  if (!activeRoom) return false;
+  const participant = activeRoom.participants.get(participantId);
+  return Boolean(participant?.isModerator);
 }
 
 // Ensure there's always a moderator among connected non-spectators
@@ -81,20 +285,64 @@ function ensureModerator(activeRoom: ActiveRoom): void {
   }
 }
 
-export function getRoomState(roomId: string): RoomState | null {
-  console.log(`[rooms] getRoomState(${roomId}), total rooms: ${activeRooms.size}, exists: ${activeRooms.has(roomId)}`);
+export function getRoomState(roomId: string, viewerParticipantId?: string): RoomState | null {
   const activeRoom = activeRooms.get(roomId);
   if (!activeRoom) return null;
 
   // Ensure there's a moderator before returning state
   ensureModerator(activeRoom);
 
+  const isRevealed = activeRoom.votingRound?.status === "revealed";
+
+  // Redact unrevealed votes from participants list unless it belongs to the viewer
+  const sanitizedParticipants: Participant[] = Array.from(
+    activeRoom.participants.values()
+  ).map((p) => ({
+    ...p,
+    currentVote:
+      isRevealed || (viewerParticipantId && p.id === viewerParticipantId)
+        ? p.currentVote
+        : undefined,
+  }));
+
+  // Redact unrevealed vote values from votingRound
+  let sanitizedVotingRound: VotingRound | null = null;
+  let votingStats: VotingStats | null = null;
+
+  if (activeRoom.votingRound) {
+    if (isRevealed) {
+      sanitizedVotingRound = activeRoom.votingRound;
+      const currentStory = activeRoom.stories.find(
+        (s) => s.id === activeRoom.votingRound?.storyId
+      );
+      votingStats =
+        currentStory?.cachedStats ??
+        calculateVotingStats(
+          activeRoom.votingRound.storyId,
+          Object.values(activeRoom.votingRound.votes)
+        );
+    } else {
+      const redactedVotes: Record<string, Vote> = {};
+      for (const [pid, vote] of Object.entries(activeRoom.votingRound.votes)) {
+        redactedVotes[pid] = {
+          ...vote,
+          value: viewerParticipantId && pid === viewerParticipantId ? vote.value : null,
+        };
+      }
+      sanitizedVotingRound = {
+        ...activeRoom.votingRound,
+        votes: redactedVotes,
+      };
+    }
+  }
+
   return {
     room: activeRoom.room,
-    participants: Array.from(activeRoom.participants.values()),
+    participants: sanitizedParticipants,
     stories: activeRoom.stories,
     currentStoryId: activeRoom.currentStoryId,
-    votingRound: activeRoom.votingRound,
+    votingRound: sanitizedVotingRound,
+    votingStats,
     chatMessages: activeRoom.chatMessages.slice(-100), // Last 100 messages
     timer: activeRoom.timer,
   };
@@ -106,6 +354,11 @@ export function addParticipant(
 ): Participant | null {
   const activeRoom = activeRooms.get(roomId);
   if (!activeRoom) return null;
+
+  if (activeRoom.cleanupTimeout) {
+    clearTimeout(activeRoom.cleanupTimeout);
+    activeRoom.cleanupTimeout = undefined;
+  }
 
   activeRoom.participants.set(participant.id, participant);
 
@@ -149,12 +402,13 @@ export function removeParticipant(
     }
   }
 
-  // Clean up room if empty
+  // Schedule cleanup if room becomes empty (preserve state for TTL grace period)
   if (activeRoom.participants.size === 0) {
     if (activeRoom.timerInterval) {
       clearInterval(activeRoom.timerInterval);
+      activeRoom.timerInterval = undefined;
     }
-    activeRooms.delete(roomId);
+    scheduleRoomCleanup(roomId, activeRoom);
   }
 
   return true;
@@ -216,6 +470,7 @@ export function submitVote(
 
   activeRoom.votingRound.votes[participantId] = vote;
   participant.hasVoted = true;
+  participant.currentVote = value;
   activeRoom.participants.set(participantId, participant);
 
   return true;
@@ -248,12 +503,10 @@ export function revealVotes(roomId: string) {
   const votes = Object.values(activeRoom.votingRound.votes);
 
   // Update participants with their votes
-  for (const vote of votes) {
-    const participant = activeRoom.participants.get(vote.participantId);
-    if (participant) {
-      participant.currentVote = vote.value;
-      activeRoom.participants.set(vote.participantId, participant);
-    }
+  for (const participant of activeRoom.participants.values()) {
+    const vote = activeRoom.votingRound.votes[participant.id];
+    participant.currentVote = vote ? vote.value : undefined;
+    activeRoom.participants.set(participant.id, participant);
   }
 
   const stats = calculateVotingStats(activeRoom.votingRound.storyId, votes);
@@ -267,7 +520,10 @@ export function revealVotes(roomId: string) {
     story.estimatedAt = new Date();
     story.cachedVotes = votes;
     story.cachedStats = stats;
+    void persistStoryToDb(story);
   }
+
+  void persistVotesToDb(roomId, votes);
 
   return { votes, stats };
 }
@@ -280,6 +536,16 @@ export function resetVotes(roomId: string): boolean {
   activeRoom.votingRound.votes = {};
   activeRoom.votingRound.revealedAt = undefined;
   activeRoom.votingRound.startedAt = new Date();
+
+  const story = activeRoom.stories.find(
+    (s) => s.id === activeRoom.votingRound?.storyId
+  );
+  if (story) {
+    story.status = "voting";
+    story.cachedVotes = undefined;
+    story.cachedStats = undefined;
+    void persistStoryToDb(story);
+  }
 
   // Reset participant vote status
   for (const participant of activeRoom.participants.values()) {
@@ -298,6 +564,12 @@ export function setCurrentStory(
   if (!activeRoom) return { success: false };
 
   activeRoom.currentStoryId = storyId;
+
+  // Always reset all participants' vote state first when switching stories
+  for (const participant of activeRoom.participants.values()) {
+    participant.hasVoted = false;
+    participant.currentVote = undefined;
+  }
 
   if (storyId) {
     const story = activeRoom.stories.find((s) => s.id === storyId);
@@ -339,12 +611,7 @@ export function setCurrentStory(
     // Update story status
     if (story) {
       story.status = "voting";
-    }
-
-    // Reset participant votes
-    for (const participant of activeRoom.participants.values()) {
-      participant.hasVoted = false;
-      participant.currentVote = undefined;
+      void persistStoryToDb(story);
     }
   } else {
     activeRoom.votingRound = null;
@@ -360,14 +627,20 @@ export function addStory(
   const activeRoom = activeRooms.get(roomId);
   if (!activeRoom) return null;
 
+  const title = storyData.title?.trim();
+  if (!title) return null;
+
   const story: Story = {
     ...storyData,
+    title,
+    description: storyData.description?.trim() || undefined,
     id: nanoid(),
     roomId,
     createdAt: new Date(),
   };
 
   activeRoom.stories.push(story);
+  void persistStoryToDb(story);
   return story;
 }
 
@@ -382,11 +655,26 @@ export function updateStory(
   const storyIndex = activeRoom.stories.findIndex((s) => s.id === storyId);
   if (storyIndex === -1) return null;
 
+  const sanitizedUpdates: Partial<Story> = {};
+  if (typeof updates.title === "string" && updates.title.trim()) {
+    sanitizedUpdates.title = updates.title.trim();
+  }
+  if (updates.description !== undefined) {
+    sanitizedUpdates.description = updates.description?.trim() || undefined;
+  }
+  if (updates.status !== undefined) {
+    sanitizedUpdates.status = updates.status;
+  }
+  if (updates.finalEstimate !== undefined) {
+    sanitizedUpdates.finalEstimate = updates.finalEstimate;
+  }
+
   activeRoom.stories[storyIndex] = {
     ...activeRoom.stories[storyIndex],
-    ...updates,
+    ...sanitizedUpdates,
   };
 
+  void persistStoryToDb(activeRoom.stories[storyIndex]);
   return activeRoom.stories[storyIndex];
 }
 
@@ -399,12 +687,23 @@ export function deleteStory(roomId: string, storyId: string): boolean {
 
   activeRoom.stories.splice(storyIndex, 1);
 
+  // Re-normalize story orders
+  activeRoom.stories.forEach((s, idx) => {
+    s.order = idx;
+    void persistStoryToDb(s);
+  });
+
   // If deleted story was current, clear current
   if (activeRoom.currentStoryId === storyId) {
     activeRoom.currentStoryId = null;
     activeRoom.votingRound = null;
+    for (const participant of activeRoom.participants.values()) {
+      participant.hasVoted = false;
+      participant.currentVote = undefined;
+    }
   }
 
+  void deleteStoryFromDb(storyId);
   return true;
 }
 
@@ -413,11 +712,24 @@ export function reorderStories(roomId: string, storyIds: string[]): boolean {
   if (!activeRoom) return false;
 
   const reorderedStories: Story[] = [];
+  const seen = new Set<string>();
+
   for (let i = 0; i < storyIds.length; i++) {
     const story = activeRoom.stories.find((s) => s.id === storyIds[i]);
-    if (story) {
-      story.order = i;
+    if (story && !seen.has(story.id)) {
+      seen.add(story.id);
+      story.order = reorderedStories.length;
       reorderedStories.push(story);
+      void persistStoryToDb(story);
+    }
+  }
+
+  // Append any stories that weren't in storyIds so none are accidentally lost
+  for (const story of activeRoom.stories) {
+    if (!seen.has(story.id)) {
+      story.order = reorderedStories.length;
+      reorderedStories.push(story);
+      void persistStoryToDb(story);
     }
   }
 
@@ -437,6 +749,7 @@ export function setFinalEstimate(
   if (!story) return false;
 
   story.finalEstimate = value;
+  void persistStoryToDb(story);
   return true;
 }
 
@@ -448,6 +761,9 @@ export function addChatMessage(
   const activeRoom = activeRooms.get(roomId);
   if (!activeRoom) return null;
 
+  const trimmed = content?.trim();
+  if (!trimmed) return null;
+
   const participant = activeRoom.participants.get(participantId);
   if (!participant) return null;
 
@@ -455,7 +771,7 @@ export function addChatMessage(
     id: nanoid(),
     participantId,
     participantName: participant.name,
-    content,
+    content: trimmed.slice(0, 1000),
     timestamp: new Date(),
     type: "message",
   };
@@ -502,6 +818,7 @@ export function updateSettings(
     ...settings,
   };
 
+  void persistRoomToDb(activeRoom.room);
   return activeRoom.room.settings;
 }
 
@@ -523,14 +840,13 @@ export function promoteModerator(
   const activeRoom = activeRooms.get(roomId);
   if (!activeRoom) return false;
 
+  const newModerator = activeRoom.participants.get(participantId);
+  if (!newModerator || newModerator.isSpectator) return false;
+
   // Remove moderator status from all
   for (const participant of activeRoom.participants.values()) {
     participant.isModerator = false;
   }
-
-  // Set new moderator
-  const newModerator = activeRoom.participants.get(participantId);
-  if (!newModerator || newModerator.isSpectator) return false;
 
   newModerator.isModerator = true;
   activeRoom.participants.set(participantId, newModerator);
@@ -554,7 +870,11 @@ export function startTimer(
   const activeRoom = activeRooms.get(roomId);
   if (!activeRoom) return null;
 
-  const duration = activeRoom.room.settings.timerDuration;
+  // Resume from paused remaining time if paused, otherwise use room timerDuration
+  const duration =
+    activeRoom.timer && !activeRoom.timer.isRunning && activeRoom.timer.remaining > 0
+      ? activeRoom.timer.remaining
+      : activeRoom.room.settings.timerDuration;
   const endsAt = new Date(Date.now() + duration * 1000);
 
   activeRoom.timer = {

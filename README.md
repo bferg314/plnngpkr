@@ -152,8 +152,9 @@ npm run dev          # Start development server (Next.js + Socket.io)
 npm run build        # Build for production
 npm run start        # Start production server
 npm run lint         # Run ESLint
+npm test             # Run unit tests
 ```
 
 ## License
 
-MIT
+AGPL-3.0-or-later

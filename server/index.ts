@@ -3,6 +3,10 @@ import { parse } from "url";
 import next from "next";
 import { initializeSocketIO } from "./socket";
 
+if (process.argv.includes("--prod") && !process.env.NODE_ENV) {
+  (process.env as Record<string, string | undefined>).NODE_ENV = "production";
+}
+
 const dev = process.env.NODE_ENV !== "production";
 const hostname = process.env.HOSTNAME || "0.0.0.0";
 const port = parseInt(process.env.PORT || "3000", 10);

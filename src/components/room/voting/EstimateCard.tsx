@@ -1,6 +1,13 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { Crown, MoreVertical, Shield, UserX } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import type { CardValue } from "@/types";
 
@@ -96,6 +103,11 @@ interface VoteCardProps {
   isRevealed: boolean;
   participantName: string;
   isCurrentUser?: boolean;
+  isModerator?: boolean;
+  connectionStatus?: "connected" | "disconnected" | "reconnecting";
+  canManage?: boolean;
+  onPromote?: () => void;
+  onKick?: () => void;
 }
 
 export function VoteCard({
@@ -104,9 +116,21 @@ export function VoteCard({
   isRevealed,
   participantName,
   isCurrentUser = false,
+  isModerator = false,
+  connectionStatus = "connected",
+  canManage = false,
+  onPromote,
+  onKick,
 }: VoteCardProps) {
+  const isOffline = connectionStatus !== "connected";
+
   return (
-    <div className="flex flex-col items-center gap-2">
+    <div
+      className={cn(
+        "flex flex-col items-center gap-2 group relative",
+        isOffline && "opacity-60"
+      )}
+    >
       <motion.div
         className="perspective-1000"
         initial={{ scale: 0.8, opacity: 0 }}
@@ -127,7 +151,7 @@ export function VoteCard({
                 : "border-border bg-muted"
             )}
           >
-            {isRevealed && vote !== undefined ? (
+            {isRevealed && vote !== undefined && vote !== null ? (
               <span className="text-xl text-primary">{vote}</span>
             ) : (
               <span className="text-muted-foreground">-</span>
@@ -175,16 +199,56 @@ export function VoteCard({
           </div>
         </motion.div>
       </motion.div>
-      <span
-        className={cn(
-          "text-sm font-medium truncate max-w-[100px]",
-          isCurrentUser ? "text-primary" : "text-muted-foreground"
+
+      <div className="flex items-center gap-1 max-w-[130px]">
+        {isModerator && (
+          <Crown
+            className="w-3.5 h-3.5 text-amber-500 shrink-0"
+            aria-label="Moderator"
+          />
         )}
-        title={participantName}
-      >
-        {participantName}
-        {isCurrentUser && " (you)"}
-      </span>
+        <span
+          className={cn(
+            "text-sm font-medium truncate",
+            isCurrentUser ? "text-primary" : "text-muted-foreground"
+          )}
+          title={participantName}
+        >
+          {participantName}
+          {isCurrentUser && " (you)"}
+        </span>
+
+        {canManage && !isCurrentUser && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                aria-label={`Manage ${participantName}`}
+              >
+                <MoreVertical className="w-3.5 h-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="center">
+              {onPromote && !isModerator && (
+                <DropdownMenuItem onClick={onPromote}>
+                  <Shield className="w-4 h-4 mr-2" />
+                  Make Moderator
+                </DropdownMenuItem>
+              )}
+              {onKick && (
+                <DropdownMenuItem
+                  onClick={onKick}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <UserX className="w-4 h-4 mr-2" />
+                  Remove from Room
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
     </div>
   );
 }

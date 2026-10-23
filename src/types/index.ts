@@ -106,6 +106,7 @@ export interface RoomState {
   stories: Story[];
   currentStoryId: string | null;
   votingRound: VotingRound | null;
+  votingStats?: VotingStats | null;
   chatMessages: ChatMessage[];
   timer: TimerState | null;
 }
@@ -149,4 +150,5 @@ export type ServerMessage =
   | { type: "timerExpired" }
   | { type: "chatMessage"; message: ChatMessage }
   | { type: "settingsUpdated"; settings: RoomSettings }
+  | { type: "kicked" }
   | { type: "error"; message: string; code: string };

@@ -4,7 +4,16 @@ import { useEffect, useRef, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
 import { nanoid } from "nanoid";
 import { useRoomStore } from "@/stores/roomStore";
-// Server message types are handled inline
+import type {
+  RoomState,
+  Participant,
+  Vote,
+  VotingStats,
+  Story,
+  ChatMessage,
+  RoomSettings,
+  CardValue,
+} from "@/types";
 
 export function useSocket(roomId: string | null) {
   const socketRef = useRef<Socket | null>(null);
@@ -15,6 +24,7 @@ export function useSocket(roomId: string | null) {
     removeParticipant,
     updateParticipant,
     setVoteReceived,
+    setVoteCleared,
     revealVotes,
     clearVotes,
     setCurrentStory,
@@ -50,7 +60,6 @@ export function useSocket(roomId: string | null) {
       socketRef.current = socket;
 
       socket.on("connect", () => {
-        console.log("Socket connected");
         setConnectionState(true, false);
 
         // Join room
@@ -62,8 +71,7 @@ export function useSocket(roomId: string | null) {
         });
       });
 
-      socket.on("disconnect", (reason) => {
-        console.log("Socket disconnected:", reason);
+      socket.on("disconnect", () => {
         setConnectionState(false, false);
       });
 
@@ -73,11 +81,11 @@ export function useSocket(roomId: string | null) {
       });
 
       // Handle server messages
-      socket.on("sync", (data: { state: any }) => {
+      socket.on("sync", (data: { state: RoomState }) => {
         syncState(data.state);
       });
 
-      socket.on("participantJoined", (data: { participant: any }) => {
+      socket.on("participantJoined", (data: { participant: Participant }) => {
         addParticipant(data.participant);
       });
 
@@ -85,7 +93,7 @@ export function useSocket(roomId: string | null) {
         removeParticipant(data.participantId);
       });
 
-      socket.on("participantUpdated", (data: { participant: any }) => {
+      socket.on("participantUpdated", (data: { participant: Participant }) => {
         updateParticipant(data.participant);
       });
 
@@ -93,7 +101,11 @@ export function useSocket(roomId: string | null) {
         setVoteReceived(data.participantId);
       });
 
-      socket.on("votesRevealed", (data: { votes: any[]; stats: any }) => {
+      socket.on("voteCleared", (data: { participantId: string }) => {
+        setVoteCleared(data.participantId);
+      });
+
+      socket.on("votesRevealed", (data: { votes: Vote[]; stats: VotingStats }) => {
         revealVotes(data.votes, data.stats);
       });
 
@@ -105,7 +117,7 @@ export function useSocket(roomId: string | null) {
         setCurrentStory(data.storyId);
       });
 
-      socket.on("storiesUpdated", (data: { stories: any[] }) => {
+      socket.on("storiesUpdated", (data: { stories: Story[] }) => {
         updateStories(data.stories);
       });
 
@@ -129,12 +141,21 @@ export function useSocket(roomId: string | null) {
         useRoomStore.setState({ timer: null });
       });
 
-      socket.on("chatMessage", (data: { message: any }) => {
+      socket.on("chatMessage", (data: { message: ChatMessage }) => {
         addChatMessage(data.message);
       });
 
-      socket.on("settingsUpdated", (data: { settings: any }) => {
+      socket.on("settingsUpdated", (data: { settings: RoomSettings }) => {
         updateSettings(data.settings);
+      });
+
+      socket.on("kicked", () => {
+        socket.disconnect();
+        setConnectionState(
+          false,
+          false,
+          "You were removed from the room by the moderator."
+        );
       });
 
       socket.on("error", (data: { message: string; code: string }) => {
@@ -142,7 +163,27 @@ export function useSocket(roomId: string | null) {
         setConnectionState(false, false, data.message);
       });
     },
-    [roomId, participantId]
+    [
+      roomId,
+      participantId,
+      setConnectionState,
+      syncState,
+      addParticipant,
+      removeParticipant,
+      updateParticipant,
+      setVoteReceived,
+      setVoteCleared,
+      revealVotes,
+      clearVotes,
+      setCurrentStory,
+      updateStories,
+      startTimer,
+      setTimerTick,
+      pauseTimer,
+      expireTimer,
+      addChatMessage,
+      updateSettings,
+    ]
   );
 
   // Disconnect
@@ -155,7 +196,7 @@ export function useSocket(roomId: string | null) {
   }, [setConnectionState]);
 
   // Actions
-  const vote = useCallback((storyId: string, value: any) => {
+  const vote = useCallback((storyId: string, value: CardValue) => {
     socketRef.current?.emit("vote", { storyId, value });
   }, []);
 
@@ -175,11 +216,11 @@ export function useSocket(roomId: string | null) {
     socketRef.current?.emit("nextStory", { storyId });
   }, []);
 
-  const addStory = useCallback((story: any) => {
+  const addStory = useCallback((story: Omit<Story, "id" | "roomId" | "createdAt">) => {
     socketRef.current?.emit("addStory", { story });
   }, []);
 
-  const updateStory = useCallback((storyId: string, updates: any) => {
+  const updateStory = useCallback((storyId: string, updates: Partial<Story>) => {
     socketRef.current?.emit("updateStory", { storyId, updates });
   }, []);
 
@@ -191,7 +232,7 @@ export function useSocket(roomId: string | null) {
     socketRef.current?.emit("reorderStories", { storyIds });
   }, []);
 
-  const setFinalEstimate = useCallback((storyId: string, value: any) => {
+  const setFinalEstimate = useCallback((storyId: string, value: CardValue) => {
     socketRef.current?.emit("setFinalEstimate", { storyId, value });
   }, []);
 
@@ -211,7 +252,7 @@ export function useSocket(roomId: string | null) {
     socketRef.current?.emit("resetTimer");
   }, []);
 
-  const changeSettings = useCallback((settings: any) => {
+  const changeSettings = useCallback((settings: Partial<RoomSettings>) => {
     socketRef.current?.emit("updateSettings", { settings });
   }, []);
 

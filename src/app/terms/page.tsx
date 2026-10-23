@@ -25,7 +25,7 @@ export default function TermsOfService() {
           <section className="space-y-4">
             <h2 className="text-xl font-semibold text-white">1. Acceptance of Terms</h2>
             <p className="text-slate-300">
-              By accessing or using plnngpkr (the "Service"), you agree to be bound by these Terms of Service ("Terms").
+              By accessing or using plnngpkr (the &quot;Service&quot;), you agree to be bound by these Terms of Service (&quot;Terms&quot;).
               If you do not agree to these Terms, do not use the Service.
             </p>
           </section>
@@ -33,7 +33,7 @@ export default function TermsOfService() {
           <section className="space-y-4">
             <h2 className="text-xl font-semibold text-white">2. Service Description</h2>
             <p className="text-slate-300">
-              plnngpkr is a real-time story estimation tool for agile teams. The Service is provided "as is"
+              plnngpkr is a real-time story estimation tool for agile teams. The Service is provided &quot;as is&quot;
               without any warranties, express or implied.
             </p>
           </section>
@@ -41,7 +41,7 @@ export default function TermsOfService() {
           <section className="space-y-4">
             <h2 className="text-xl font-semibold text-white">3. Disclaimer of Warranties</h2>
             <p className="text-slate-300">
-              THE SERVICE IS PROVIDED ON AN "AS IS" AND "AS AVAILABLE" BASIS WITHOUT WARRANTIES OF ANY KIND,
+              THE SERVICE IS PROVIDED ON AN &quot;AS IS&quot; AND &quot;AS AVAILABLE&quot; BASIS WITHOUT WARRANTIES OF ANY KIND,
               EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO:
             </p>
             <ul className="list-disc list-inside text-slate-300 space-y-2 ml-4">

@@ -9,6 +9,10 @@ export async function GET(
   const { searchParams } = new URL(request.url);
   const format = searchParams.get("format") || "json";
 
+  if (!roomManager.getRoom(roomId)) {
+    await roomManager.hydrateRoomFromDb(roomId);
+  }
+
   if (format === "csv") {
     const csv = roomManager.exportStories(roomId);
     if (!csv) {
@@ -35,5 +39,10 @@ export async function GET(
     );
   }
 
-  return NextResponse.json(data);
+  return new NextResponse(JSON.stringify(data, null, 2), {
+    headers: {
+      "Content-Type": "application/json",
+      "Content-Disposition": `attachment; filename="${roomId}-stories.json"`,
+    },
+  });
 }
