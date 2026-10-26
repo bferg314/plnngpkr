@@ -2,6 +2,7 @@ import { createServer } from "http";
 import { parse } from "url";
 import next from "next";
 import { initializeSocketIO } from "./socket";
+import { runMigrations } from "./migrate";
 
 if (process.argv.includes("--prod") && !process.env.NODE_ENV) {
   (process.env as Record<string, string | undefined>).NODE_ENV = "production";
@@ -14,7 +15,13 @@ const port = parseInt(process.env.PORT || "3000", 10);
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
 
-app.prepare().then(() => {
+// A failed migration stops the server, so a bad deploy fails its health check.
+const migrated = runMigrations().catch((err) => {
+  console.error("Database migration failed:", err);
+  process.exit(1);
+});
+
+migrated.then(() => app.prepare()).then(() => {
   const httpServer = createServer((req, res) => {
     try {
       const parsedUrl = parse(req.url!, true);
