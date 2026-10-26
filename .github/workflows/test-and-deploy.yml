@@ -1,0 +1,43 @@
+# Test every push to main; if tests pass, ask bferg314/deploys to deploy this commit.
+# Runs on GitHub-hosted runners only. Never add pull_request_target or workflow_run
+# here: both hand repo secrets to code from forks.
+name: test-and-deploy
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 20 # matches the Dockerfile
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npm test
+      # A schema change without its migration would deploy and then fail to persist.
+      - name: Migrations match the schema
+        run: |
+          npx drizzle-kit generate
+          git status --porcelain drizzle | grep . && { echo "run npm run db:generate and commit the migration"; exit 1; } || true
+      - run: npm run build
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask deploys to deploy this commit
+        env:
+          TOKEN: ${{ secrets.DEPLOYS_DISPATCH_TOKEN }}
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/bferg314/deploys/dispatches \
+            -d "{\"event_type\":\"deploy\",\"client_payload\":{\"app\":\"plnngpkr\",\"sha\":\"$GITHUB_SHA\"}}"
