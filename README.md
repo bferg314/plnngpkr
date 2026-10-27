@@ -84,10 +84,9 @@ Mounts your local source tree for live reloading and spins up a local PostgreSQL
 
 ```bash
 docker compose -f docker-compose.dev.yml up --build
-
-# (First time only) Push the Drizzle schema to the dev Postgres container
-docker exec -it plnngpkr-app-dev npm run db:push
 ```
+
+Database migrations run automatically when the server starts.
 
 ### 2. Local Production Build (`docker-compose.yml`)
 Builds the hardened multi-stage production `Dockerfile` locally alongside PostgreSQL 16:
@@ -165,9 +164,11 @@ poker.yourdomain.com {
 plnngpkr/
 ├── server/
 │   ├── index.ts                # Custom Node HTTP server + Next.js + Socket.IO bootstrap
+│   ├── migrate.ts              # Applies drizzle/migrations on start
 │   ├── socket.ts               # WebSocket event handlers & moderator authorization
 │   ├── rooms.ts                # Room state engine, vote redaction, TTL, & DB write-behind
 │   └── __tests__/              # Server & room state unit tests
+├── drizzle/migrations/         # Generated SQL migrations, applied on start
 ├── src/
 │   ├── app/
 │   │   ├── api/                # REST endpoints (/api/health, /api/rooms, /api/rooms/[id]/export)
