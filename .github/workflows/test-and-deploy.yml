@@ -31,6 +31,9 @@ jobs:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # The dispatch token lives only in this environment, which only main can use,
+    # so workflows on other branches cannot read it.
+    environment: production
     steps:
       - name: Ask deploys to deploy this commit
         env:
