@@ -116,23 +116,16 @@ export default function RoomPage() {
     promoteModerator,
   } = useSocket(roomId);
 
-  // Check for saved participant info on mount
-  const savedNameRef = useRef<string | null>(null);
-  const savedIdRef = useRef<string | null>(null);
-  if (savedNameRef.current === null && typeof window !== "undefined") {
-    savedNameRef.current = localStorage.getItem("plnngpkr_participant_name") || "";
-    savedIdRef.current = localStorage.getItem("plnngpkr_participant_id") || null;
-  }
-
-  // Initialize join name and participant ID from saved values
+  // Initialize join name and participant ID from saved participant info on mount
   useEffect(() => {
-    if (savedNameRef.current && !joinName) {
-      setJoinName(savedNameRef.current);
+    const savedName = localStorage.getItem("plnngpkr_participant_name") || "";
+    const savedId = localStorage.getItem("plnngpkr_participant_id") || null;
+    if (savedName && !joinName) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs from localStorage, which is unavailable during SSR
+      setJoinName(savedName);
     }
-    if (savedIdRef.current && !participantId) {
-      useRoomStore
-        .getState()
-        .setParticipant(savedIdRef.current, savedNameRef.current || "");
+    if (savedId && !participantId) {
+      useRoomStore.getState().setParticipant(savedId, savedName);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -140,6 +133,7 @@ export default function RoomPage() {
   // Sync selectedCard with currentStoryId and participant's vote state
   useEffect(() => {
     if (!currentStoryId || !currentParticipant?.hasVoted) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs from the room store
       setSelectedCard(undefined);
     } else if (currentParticipant.currentVote !== undefined) {
       setSelectedCard(currentParticipant.currentVote);
@@ -149,6 +143,7 @@ export default function RoomPage() {
   // Auto-scroll chat & reset unread counter when chat is open
   useEffect(() => {
     if (isChatOpen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs from the room store
       setLastSeenChatCount(chatMessages.length);
       chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
