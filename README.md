@@ -118,6 +118,8 @@ Copy `.env.example` to `.env` to customize your environment:
 | `NODE_ENV` | No | `development` | Environment mode (`development` or `production`) |
 | `NEXT_PUBLIC_APP_URL` | No | `http://localhost:3000` | Public URL used by clients |
 | `DATABASE_URL` | No* | — | PostgreSQL connection URI (`postgresql://user:pass@host:5432/db`). *If omitted, runs in-memory.* |
+| `ROOM_RETENTION_DAYS` | No | `30` | Days a room stays in PostgreSQL after its last activity before it is deleted with its stories and votes. `0` keeps rooms forever |
+| `TRUST_PROXY` | No | `true` | Take the client IP for rate limits from the last `X-Forwarded-For` entry. Set to `false` when nothing in front of the app sets that header |
 | `POSTGRES_USER` | Docker | `plnngpkr` | PostgreSQL username for Docker Compose |
 | `POSTGRES_PASSWORD` | Docker | — | PostgreSQL password for Docker Compose |
 | `POSTGRES_DB` | Docker | `plnngpkr` | PostgreSQL database name for Docker Compose |
@@ -166,7 +168,8 @@ plnngpkr/
 │   ├── index.ts                # Custom Node HTTP server + Next.js + Socket.IO bootstrap
 │   ├── migrate.ts              # Applies drizzle/migrations on start
 │   ├── socket.ts               # WebSocket event handlers & moderator authorization
-│   ├── rooms.ts                # Room state engine, vote redaction, TTL, & DB write-behind
+│   ├── rooms.ts                # Room state engine, vote redaction, TTL, DB write-behind & cleanup
+│   ├── rateLimit.ts            # Rate limits for socket events and room creation
 │   └── __tests__/              # Server & room state unit tests
 ├── drizzle/migrations/         # Generated SQL migrations, applied on start
 ├── src/

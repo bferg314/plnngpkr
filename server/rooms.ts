@@ -14,11 +14,15 @@ import type {
 } from "../src/types";
 import { calculateVotingStats } from "../src/lib/utils/statistics";
 import { db, rooms as roomsTable, stories as storiesTable, voteHistory as voteHistoryTable } from "../src/lib/db";
-import { eq, asc } from "drizzle-orm";
+import { eq, asc, and, or, lt, gte, notExists, notInArray, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
 // Room TTL when empty (1 hour)
 const ROOM_EMPTY_TTL_MS = 60 * 60 * 1000;
+
+// How long a room stays in the database after its last activity (default 30 days)
+const DEFAULT_ROOM_RETENTION_DAYS = 30;
+const DB_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
 // In-memory store for active room states
 // Using globalThis to ensure singleton across module reloads in development
@@ -47,6 +51,20 @@ if (!globalStore.__plnngpkr_rooms) {
 const activeRooms = globalStore.__plnngpkr_rooms;
 
 // --- Database Persistence Helpers (Non-blocking with graceful fallback) ---
+
+// Writes run in the background; keep hold of them so tests can wait them out.
+const pendingWrites = new Set<Promise<void>>();
+
+function trackWrite(write: Promise<void>): void {
+  pendingWrites.add(write);
+  void write.finally(() => pendingWrites.delete(write));
+}
+
+export async function flushDbWrites(): Promise<void> {
+  while (pendingWrites.size > 0) {
+    await Promise.all(pendingWrites);
+  }
+}
 
 async function persistRoomToDb(room: Room): Promise<void> {
   if (!db) return;
@@ -143,6 +161,87 @@ async function persistVotesToDb(roomId: string, votes: Vote[]): Promise<void> {
   }
 }
 
+// Mark a room as recently used, so the database cleanup measures retention from now.
+async function touchRoomInDb(roomId: string): Promise<void> {
+  if (!db) return;
+  try {
+    await db.update(roomsTable).set({ updatedAt: new Date() }).where(eq(roomsTable.id, roomId));
+  } catch (err) {
+    console.warn("[rooms] Failed to update room activity in database:", err);
+  }
+}
+
+// Delete rooms with no activity since `now - retentionMs`. Activity is the room's
+// updated_at (bumped when it leaves memory), a story created or estimated, or a
+// vote recorded. Rooms in memory are skipped. Stories and vote history go with
+// the room through ON DELETE CASCADE. Returns the number of rooms deleted.
+export async function purgeExpiredRoomsFromDb(
+  retentionMs: number,
+  now: Date = new Date()
+): Promise<number> {
+  if (!db) return 0;
+  const cutoff = new Date(now.getTime() - retentionMs);
+  const activeIds = Array.from(activeRooms.keys());
+
+  const deleted = await db
+    .delete(roomsTable)
+    .where(
+      and(
+        lt(roomsTable.updatedAt, cutoff),
+        activeIds.length > 0 ? notInArray(roomsTable.id, activeIds) : undefined,
+        notExists(
+          db
+            .select({ one: sql`1` })
+            .from(storiesTable)
+            .where(
+              and(
+                eq(storiesTable.roomId, roomsTable.id),
+                or(gte(storiesTable.createdAt, cutoff), gte(storiesTable.estimatedAt, cutoff))
+              )
+            )
+        ),
+        notExists(
+          db
+            .select({ one: sql`1` })
+            .from(voteHistoryTable)
+            .where(
+              and(eq(voteHistoryTable.roomId, roomsTable.id), gte(voteHistoryTable.votedAt, cutoff))
+            )
+        )
+      )
+    )
+    .returning({ id: roomsTable.id });
+  return deleted.length;
+}
+
+export function roomRetentionMs(): number | null {
+  const raw = process.env.ROOM_RETENTION_DAYS;
+  const days = raw === undefined || raw === "" ? DEFAULT_ROOM_RETENTION_DAYS : Number(raw);
+  if (!Number.isFinite(days) || days <= 0) return null;
+  return days * 24 * 60 * 60 * 1000;
+}
+
+// Run the database cleanup now and then hourly. ROOM_RETENTION_DAYS=0 turns it off.
+// Returns a function that stops it.
+export function startDbCleanup(): () => void {
+  const retentionMs = roomRetentionMs();
+  if (!db || retentionMs === null) return () => {};
+
+  const run = async () => {
+    try {
+      const count = await purgeExpiredRoomsFromDb(retentionMs);
+      if (count > 0) console.log(`[rooms] Deleted ${count} expired room(s) from database`);
+    } catch (err) {
+      console.warn("[rooms] Failed to delete expired rooms from database:", err);
+    }
+  };
+
+  void run();
+  const interval = setInterval(run, DB_CLEANUP_INTERVAL_MS);
+  interval.unref();
+  return () => clearInterval(interval);
+}
+
 export async function hydrateRoomFromDb(roomId: string): Promise<ActiveRoom | undefined> {
   const existing = activeRooms.get(roomId);
   if (existing) return existing;
@@ -199,6 +298,7 @@ export async function hydrateRoomFromDb(roomId: string): Promise<ActiveRoom | un
 
     scheduleRoomCleanup(roomId, activeRoom);
     activeRooms.set(roomId, activeRoom);
+    await touchRoomInDb(roomId);
     return activeRoom;
   } catch (err) {
     console.warn("[rooms] Failed to hydrate room from database:", err);
@@ -211,16 +311,27 @@ function scheduleRoomCleanup(roomId: string, activeRoom: ActiveRoom, ttlMs = ROO
     clearTimeout(activeRoom.cleanupTimeout);
   }
   activeRoom.cleanupTimeout = setTimeout(() => {
-    if (activeRoom.participants.size === 0) {
-      if (activeRoom.timerInterval) {
-        clearInterval(activeRoom.timerInterval);
-      }
-      activeRooms.delete(roomId);
-    }
+    void expireIdleRoom(roomId);
   }, ttlMs);
   if (typeof activeRoom.cleanupTimeout.unref === "function") {
     activeRoom.cleanupTimeout.unref();
   }
+}
+
+// Drop an empty room from memory once its TTL passes. The database copy stays, so
+// the link keeps working, and its updated_at starts the retention period.
+export async function expireIdleRoom(roomId: string): Promise<boolean> {
+  const activeRoom = activeRooms.get(roomId);
+  if (!activeRoom || activeRoom.participants.size > 0) return false;
+  if (activeRoom.timerInterval) {
+    clearInterval(activeRoom.timerInterval);
+  }
+  if (activeRoom.cleanupTimeout) {
+    clearTimeout(activeRoom.cleanupTimeout);
+  }
+  activeRooms.delete(roomId);
+  await touchRoomInDb(roomId);
+  return true;
 }
 
 export function createRoom(roomData: Omit<Room, "createdAt">): Room {
@@ -241,7 +352,7 @@ export function createRoom(roomData: Omit<Room, "createdAt">): Room {
 
   scheduleRoomCleanup(room.id, activeRoom);
   activeRooms.set(room.id, activeRoom);
-  void persistRoomToDb(room);
+  trackWrite(persistRoomToDb(room));
   return room;
 }
 
@@ -520,10 +631,10 @@ export function revealVotes(roomId: string) {
     story.estimatedAt = new Date();
     story.cachedVotes = votes;
     story.cachedStats = stats;
-    void persistStoryToDb(story);
+    trackWrite(persistStoryToDb(story));
   }
 
-  void persistVotesToDb(roomId, votes);
+  trackWrite(persistVotesToDb(roomId, votes));
 
   return { votes, stats };
 }
@@ -544,7 +655,7 @@ export function resetVotes(roomId: string): boolean {
     story.status = "voting";
     story.cachedVotes = undefined;
     story.cachedStats = undefined;
-    void persistStoryToDb(story);
+    trackWrite(persistStoryToDb(story));
   }
 
   // Reset participant vote status
@@ -611,7 +722,7 @@ export function setCurrentStory(
     // Update story status
     if (story) {
       story.status = "voting";
-      void persistStoryToDb(story);
+      trackWrite(persistStoryToDb(story));
     }
   } else {
     activeRoom.votingRound = null;
@@ -640,7 +751,7 @@ export function addStory(
   };
 
   activeRoom.stories.push(story);
-  void persistStoryToDb(story);
+  trackWrite(persistStoryToDb(story));
   return story;
 }
 
@@ -674,7 +785,7 @@ export function updateStory(
     ...sanitizedUpdates,
   };
 
-  void persistStoryToDb(activeRoom.stories[storyIndex]);
+  trackWrite(persistStoryToDb(activeRoom.stories[storyIndex]));
   return activeRoom.stories[storyIndex];
 }
 
@@ -690,7 +801,7 @@ export function deleteStory(roomId: string, storyId: string): boolean {
   // Re-normalize story orders
   activeRoom.stories.forEach((s, idx) => {
     s.order = idx;
-    void persistStoryToDb(s);
+    trackWrite(persistStoryToDb(s));
   });
 
   // If deleted story was current, clear current
@@ -703,7 +814,7 @@ export function deleteStory(roomId: string, storyId: string): boolean {
     }
   }
 
-  void deleteStoryFromDb(storyId);
+  trackWrite(deleteStoryFromDb(storyId));
   return true;
 }
 
@@ -720,7 +831,7 @@ export function reorderStories(roomId: string, storyIds: string[]): boolean {
       seen.add(story.id);
       story.order = reorderedStories.length;
       reorderedStories.push(story);
-      void persistStoryToDb(story);
+      trackWrite(persistStoryToDb(story));
     }
   }
 
@@ -729,7 +840,7 @@ export function reorderStories(roomId: string, storyIds: string[]): boolean {
     if (!seen.has(story.id)) {
       story.order = reorderedStories.length;
       reorderedStories.push(story);
-      void persistStoryToDb(story);
+      trackWrite(persistStoryToDb(story));
     }
   }
 
@@ -749,7 +860,7 @@ export function setFinalEstimate(
   if (!story) return false;
 
   story.finalEstimate = value;
-  void persistStoryToDb(story);
+  trackWrite(persistStoryToDb(story));
   return true;
 }
 
@@ -818,7 +929,7 @@ export function updateSettings(
     ...settings,
   };
 
-  void persistRoomToDb(activeRoom.room);
+  trackWrite(persistRoomToDb(activeRoom.room));
   return activeRoom.room.settings;
 }
 

@@ -38,8 +38,10 @@ server/                   # Socket.io server
   index.ts                # HTTP server setup; runs migrations before listening
   migrate.ts              # Applies drizzle/migrations on start
   socket.ts               # Socket event handlers
-  rooms.ts                # Room state (in memory) with Postgres write-behind
-  __tests__/              # Room state unit tests
+  rooms.ts                # Room state (in memory) with Postgres write-behind and cleanup
+  rateLimit.ts            # Rate limits for socket events and POST /api/rooms
+  __tests__/              # Room state, rate limit and database tests
+    helpers/              # Test server and Socket.IO client helpers
 
 drizzle/migrations/       # Generated SQL migrations (committed)
 ```
@@ -64,7 +66,9 @@ npm run dev          # Start development server (Next.js + Socket.io)
 npm run build        # Build for production
 npm run start        # Start production server
 npm run lint         # Run ESLint
-npm test             # Run unit tests (statistics, room state)
+npm test             # Run unit tests (statistics, room state, rate limits)
+                     # Database tests run only with DATABASE_URL set, e.g.
+                     # createdb plnngpkr_test && DATABASE_URL=postgres:///plnngpkr_test npm test
 npm run db:generate  # Generate a migration after changing the schema
 ```
 
@@ -74,6 +78,8 @@ npm run db:generate  # Generate a migration after changing the schema
 - Active room state lives in memory on the server. Empty rooms are dropped from memory after 1 hour
 - With `DATABASE_URL` set, rooms, stories, and vote history are also written to PostgreSQL via Drizzle ORM. Writes are non-blocking; a failed write logs a warning and the room keeps working. A room not in memory is reloaded from the database
 - Without `DATABASE_URL`, the app runs in memory only and nothing is persisted
+- Rooms are deleted from the database after `ROOM_RETENTION_DAYS` (default 30) without activity. Activity is the room's `updated_at` (bumped when the room is loaded and when it leaves memory), a story created or estimated, or a vote recorded. The cleanup runs on start and hourly, skips rooms in memory, and cascades to stories and vote history
+- Socket events are rate limited per socket (join, chat, vote/clearVote, and everything else in a shared bucket) and joins also per IP; dropped events get one `rateLimited` notice, which the client shows as a toast. `POST /api/rooms` is limited per IP in `server/index.ts` before Next.js and answers 429 with `Retry-After`. Limits live in `LIMITS` in `server/rateLimit.ts`. The client IP is the last `X-Forwarded-For` entry (production runs behind a tunnel) unless `TRUST_PROXY=false`
 - On start, `server/migrate.ts` applies pending migrations from `drizzle/migrations`. A failed migration stops the server
 - Client state is managed via Zustand with selectors for derived state
 - Stories store their voting results via `finalEstimate` and `status` fields
