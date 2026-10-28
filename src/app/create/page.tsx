@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { nanoid } from "nanoid";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -82,6 +83,13 @@ export default function CreateRoomPage() {
           settings,
         }),
       });
+
+      if (response.status === 429) {
+        const data = await response.json().catch(() => null);
+        toast.error(data?.error ?? "Too many rooms created. Try again in a minute.");
+        setIsCreating(false);
+        return;
+      }
 
       if (!response.ok) {
         throw new Error("Failed to create room");

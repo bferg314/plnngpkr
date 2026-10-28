@@ -3,6 +3,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
 import { nanoid } from "nanoid";
+import { toast } from "sonner";
 import { useRoomStore } from "@/stores/roomStore";
 import type {
   RoomState,
@@ -156,6 +157,10 @@ export function useSocket(roomId: string | null) {
           false,
           "You were removed from the room by the moderator."
         );
+      });
+
+      socket.on("rateLimited", (data: { message: string }) => {
+        toast.error(data.message);
       });
 
       socket.on("error", (data: { message: string; code: string }) => {

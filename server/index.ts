@@ -3,6 +3,8 @@ import { parse } from "url";
 import next from "next";
 import { initializeSocketIO } from "./socket";
 import { runMigrations } from "./migrate";
+import { rejectRoomCreation } from "./rateLimit";
+import { startDbCleanup } from "./rooms";
 
 if (process.argv.includes("--prod") && !process.env.NODE_ENV) {
   (process.env as Record<string, string | undefined>).NODE_ENV = "production";
@@ -24,6 +26,7 @@ const migrated = runMigrations().catch((err) => {
 migrated.then(() => app.prepare()).then(() => {
   const httpServer = createServer((req, res) => {
     try {
+      if (rejectRoomCreation(req, res)) return;
       const parsedUrl = parse(req.url!, true);
       handle(req, res, parsedUrl);
     } catch (err) {
@@ -35,6 +38,9 @@ migrated.then(() => app.prepare()).then(() => {
 
   // Initialize Socket.IO
   const io = initializeSocketIO(httpServer);
+
+  // Delete rooms from the database once they have been idle past the retention period
+  startDbCleanup();
 
   httpServer.listen(port, () => {
     console.log(`> Ready on http://${hostname}:${port}`);

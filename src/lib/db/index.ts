@@ -7,9 +7,10 @@ const connectionString = process.env.DATABASE_URL;
 
 // For migrations and server-side operations
 let db: ReturnType<typeof drizzle<typeof schema>> | null = null;
+let client: ReturnType<typeof postgres> | null = null;
 
 if (connectionString) {
-  const client = postgres(connectionString, {
+  client = postgres(connectionString, {
     onnotice: () => {},
   });
   db = drizzle(client, { schema });
@@ -18,6 +19,11 @@ if (connectionString) {
   if (process.env.NODE_ENV !== "test") {
     console.warn("DATABASE_URL not set - using in-memory storage");
   }
+}
+
+// Close the connection pool, so scripts and tests can exit.
+export async function closeDb(): Promise<void> {
+  await client?.end();
 }
 
 export { db };

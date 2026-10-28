@@ -1,11 +1,18 @@
-import { describe, it, beforeEach } from "node:test";
+import { describe, it, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import * as rooms from "../rooms";
 import { DEFAULT_ROOM_SETTINGS } from "../../src/lib/constants/decks";
+import { closeDb } from "../../src/lib/db";
 
 const TEST_ROOM_ID = "test-room-1";
 
 describe("server/rooms state management", () => {
+  // With DATABASE_URL set, room writes open a connection pool that would keep the process alive
+  after(async () => {
+    await rooms.flushDbWrites();
+    await closeDb();
+  });
+
   beforeEach(() => {
     rooms.deleteRoom(TEST_ROOM_ID);
     rooms.createRoom({

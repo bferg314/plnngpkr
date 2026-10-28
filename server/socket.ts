@@ -2,6 +2,7 @@ import { Server as SocketIOServer, Socket } from "socket.io";
 import type { Server as HTTPServer } from "http";
 import type { Participant, CardValue, Story, RoomSettings } from "../src/types";
 import * as rooms from "./rooms";
+import { RateLimiter, LIMITS, eventGroup, clientIp, type RateLimit } from "./rateLimit";
 
 // Map socket ID to participant info for reconnection
 const socketToParticipant = new Map<
@@ -9,7 +10,14 @@ const socketToParticipant = new Map<
   { roomId: string; participantId: string }
 >();
 
-export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
+export interface SocketServerOptions {
+  limits?: Partial<typeof LIMITS>;
+}
+
+export function initializeSocketIO(
+  httpServer: HTTPServer,
+  options: SocketServerOptions = {}
+): SocketIOServer {
   const io = new SocketIOServer(httpServer, {
     cors: {
       origin: process.env.NODE_ENV === "production"
@@ -21,8 +29,56 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
     pingInterval: 25000,
   });
 
+  const limits = { ...LIMITS, ...options.limits };
+  const limiters = new Map<string, RateLimiter>();
+  const limiterFor = (name: string, limit: RateLimit) => {
+    let limiter = limiters.get(name);
+    if (!limiter) {
+      limiter = new RateLimiter(limit);
+      limiters.set(name, limiter);
+    }
+    return limiter;
+  };
+  const joinPerIp = limiterFor("joinPerIp", limits.joinPerIp);
+  const pruneInterval = setInterval(() => {
+    for (const limiter of limiters.values()) limiter.prune();
+  }, 60_000);
+  pruneInterval.unref();
+
   io.on("connection", (socket: Socket) => {
     console.log(`Socket connected: ${socket.id}`);
+
+    const ip = clientIp(socket.handshake.address, socket.handshake.headers);
+    // One rateLimited notice per throttled streak, not one per dropped event
+    const throttled = new Set<string>();
+
+    // Drop events over their limit and tell the sender once
+    socket.use(([event], next) => {
+      const group = eventGroup(event);
+      let result = limiterFor(group, limits[group]).take(socket.id);
+      if (result.allowed && event === "join") {
+        result = joinPerIp.take(ip);
+      }
+      if (result.allowed) {
+        throttled.delete(group);
+        next();
+        return;
+      }
+      if (!throttled.has(group)) {
+        throttled.add(group);
+        socket.emit("rateLimited", {
+          event,
+          retryAfterMs: result.retryAfterMs,
+          message: `You're doing that too fast. Try again in ${Math.ceil(result.retryAfterMs / 1000)}s.`,
+        });
+      }
+    });
+
+    socket.on("disconnect", () => {
+      for (const [name, limiter] of limiters) {
+        if (name !== "joinPerIp") limiter.delete(socket.id);
+      }
+    });
 
     // Join room
     socket.on("join", async (data: { roomId: string; participantId: string; name: string; isSpectator: boolean }) => {
@@ -451,7 +507,7 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
       }
 
       // Remove from tracking after timeout (allow reconnection)
-      setTimeout(() => {
+      const removeTimeout = setTimeout(() => {
         const currentInfo = socketToParticipant.get(socket.id);
         if (currentInfo) {
           const room = rooms.getRoom(currentInfo.roomId);
@@ -489,6 +545,8 @@ export function initializeSocketIO(httpServer: HTTPServer): SocketIOServer {
           socketToParticipant.delete(socket.id);
         }
       }, 30000); // 30 second timeout for reconnection
+      // The HTTP server keeps the process alive; this timer shouldn't on its own
+      removeTimeout.unref();
     });
   });
 
