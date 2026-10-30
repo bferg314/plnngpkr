@@ -73,7 +73,7 @@ const ROOM_ID = "rate-limit-room";
 
 async function joinRoom(socket: ClientSocket, participantId: string): Promise<void> {
   const synced = nextEvent(socket, "sync");
-  socket.emit("join", { roomId: ROOM_ID, participantId, name: participantId, isSpectator: false });
+  socket.emit("join", { roomId: ROOM_ID, participantId, key: `${participantId}-key-0123456789`, name: participantId, isSpectator: false });
   await synced;
 }
 
@@ -174,7 +174,7 @@ describe("socket rate limits", () => {
       const third = await connectClient(limited.url);
       sockets.push(third);
       const notice = nextEvent<{ event: string }>(third, "rateLimited");
-      third.emit("join", { roomId: ROOM_ID, participantId: "p2", name: "p2", isSpectator: false });
+      third.emit("join", { roomId: ROOM_ID, participantId: "p2", key: "p2-key-0123456789", name: "p2", isSpectator: false });
       assert.equal((await notice).event, "join");
       assert.equal(rooms.getRoom(ROOM_ID)?.participants.has("p2"), false);
     } finally {
