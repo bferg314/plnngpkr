@@ -10,7 +10,7 @@
     "start": "tsx server/index.ts --prod",
     "start:next": "next start",
     "lint": "eslint",
-    "test": "tsx --test src/lib/utils/__tests__/statistics.test.ts server/__tests__/rooms.test.ts server/__tests__/rateLimit.test.ts server/__tests__/rooms.db.test.ts",
+    "test": "tsx --test src/lib/utils/__tests__/statistics.test.ts server/__tests__/rooms.test.ts server/__tests__/rateLimit.test.ts server/__tests__/participantKey.test.ts server/__tests__/rooms.db.test.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",

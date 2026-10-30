@@ -16,6 +16,7 @@ import { calculateVotingStats } from "../src/lib/utils/statistics";
 import { db, rooms as roomsTable, stories as storiesTable, voteHistory as voteHistoryTable } from "../src/lib/db";
 import { eq, asc, and, or, lt, gte, notExists, notInArray, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { timingSafeEqual } from "crypto";
 
 // Room TTL when empty (1 hour)
 const ROOM_EMPTY_TTL_MS = 60 * 60 * 1000;
@@ -33,6 +34,8 @@ const globalStore = globalThis as typeof globalThis & {
 export interface ActiveRoom {
   room: Room;
   participants: Map<string, Participant>;
+  // Rejoin key per participant ID. Kept out of Participant so it is never sent to clients.
+  participantKeys: Map<string, string>;
   stories: Story[];
   currentStoryId: string | null;
   votingRound: VotingRound | null;
@@ -289,6 +292,7 @@ export async function hydrateRoomFromDb(roomId: string): Promise<ActiveRoom | un
     const activeRoom: ActiveRoom = {
       room,
       participants: new Map(),
+      participantKeys: new Map(),
       stories,
       currentStoryId: null,
       votingRound: null,
@@ -343,6 +347,7 @@ export function createRoom(roomData: Omit<Room, "createdAt">): Room {
   const activeRoom: ActiveRoom = {
     room,
     participants: new Map(),
+    participantKeys: new Map(),
     stories: [],
     currentStoryId: null,
     votingRound: null,
@@ -490,6 +495,26 @@ export function addParticipant(
   return participant;
 }
 
+// Participant IDs are visible to everyone in the room, so rejoining under an
+// existing ID needs the key that was sent when the ID was first used.
+export function claimParticipantKey(
+  roomId: string,
+  participantId: string,
+  key: string
+): boolean {
+  const activeRoom = activeRooms.get(roomId);
+  if (!activeRoom) return false;
+
+  const stored = activeRoom.participantKeys.get(participantId);
+  if (stored === undefined) {
+    activeRoom.participantKeys.set(participantId, key);
+    return true;
+  }
+  const a = Buffer.from(stored);
+  const b = Buffer.from(key);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 export function removeParticipant(
   roomId: string,
   participantId: string
@@ -501,6 +526,7 @@ export function removeParticipant(
   if (!participant) return false;
 
   activeRoom.participants.delete(participantId);
+  activeRoom.participantKeys.delete(participantId);
 
   // If moderator left, assign new moderator
   if (participant.isModerator) {

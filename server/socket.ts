@@ -81,8 +81,16 @@ export function initializeSocketIO(
     });
 
     // Join room
-    socket.on("join", async (data: { roomId: string; participantId: string; name: string; isSpectator: boolean }) => {
-      if (!data || !data.roomId || !data.participantId || !data.name?.trim()) {
+    socket.on("join", async (data: { roomId: string; participantId: string; key: string; name: string; isSpectator: boolean }) => {
+      if (
+        !data ||
+        !data.roomId ||
+        !data.participantId ||
+        typeof data.key !== "string" ||
+        data.key.length < 16 ||
+        data.key.length > 128 ||
+        !data.name?.trim()
+      ) {
         socket.emit("error", { message: "Invalid join parameters", code: "INVALID_PARAMS" });
         return;
       }
@@ -99,6 +107,11 @@ export function initializeSocketIO(
       const roomState = rooms.getRoomState(roomId);
       if (!roomState) {
         socket.emit("error", { message: "Room not found", code: "ROOM_NOT_FOUND" });
+        return;
+      }
+
+      if (!rooms.claimParticipantKey(roomId, participantId, data.key)) {
+        socket.emit("error", { message: "That participant ID belongs to someone else", code: "PARTICIPANT_KEY_MISMATCH" });
         return;
       }
 

@@ -47,8 +47,12 @@ export function useSocket(roomId: string | null) {
       const pid = participantId || nanoid();
       useRoomStore.getState().setParticipant(pid, name);
 
+      // The key proves this browser owns pid when it rejoins
+      const key = localStorage.getItem("plnngpkr_participant_key") || nanoid(32);
+
       // Store participant ID in localStorage for reconnection
       localStorage.setItem("plnngpkr_participant_id", pid);
+      localStorage.setItem("plnngpkr_participant_key", key);
       localStorage.setItem("plnngpkr_participant_name", name);
 
       setConnectionState(false, true);
@@ -67,6 +71,7 @@ export function useSocket(roomId: string | null) {
         socket.emit("join", {
           roomId,
           participantId: pid,
+          key,
           name,
           isSpectator,
         });
