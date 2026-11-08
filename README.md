@@ -199,14 +199,62 @@ plnngpkr/
 ## 🛠️ Development Scripts
 
 ```bash
-npm run dev          # Start development server (Next.js + Socket.IO)
+npm run dev          # Start development server (Next.js + Socket.IO; runs pending migrations)
 npm run build        # Build Next.js application for production
-npm run start        # Start production server (cross-platform)
+npm run start        # Start production server (cross-platform; runs pending migrations)
 npm run lint         # Run ESLint static analysis
 npm test             # Run unit test suite (statistics & room state engine)
-npm run db:generate  # Generate Drizzle SQL migrations
-npm run db:push      # Push Drizzle schema directly to PostgreSQL
+npm run db:generate  # Generate Drizzle SQL migrations in drizzle/migrations/ (normal schema workflow)
+npm run db:push      # Dev-only: push schema directly to a throwaway DB without recording migrations
 npm run db:studio    # Open Drizzle Studio database GUI
+```
+
+> **Note:** Normal schema changes should edit `src/lib/db/schema.ts`, run `npm run db:generate`, and let the server apply `drizzle/migrations/` automatically on start (`server/migrate.ts`). Do not run `npm run db:push` against a database that will start the server, because `db:push` creates tables without recording them in `drizzle.__drizzle_migrations`, causing `0000_init.sql` to fail with `relation "rooms" already exists` on the next start.
+
+### Upgrading a database created with `db:push`
+
+If an existing database (such as a `v1.1.0` install or dev container initialized with `npm run db:push`) already has the `rooms`, `stories`, and `vote_history` tables but no Drizzle migration journal, the server will exit on startup when `0000_init.sql` tries to create `rooms`.
+
+To recover while **keeping existing data**, baseline the Drizzle migration journal so `0000_init` (`when: 1792976461926`, SHA-256 of `drizzle/migrations/0000_init.sql`) is marked applied:
+
+```sql
+CREATE SCHEMA IF NOT EXISTS "drizzle";
+
+CREATE TABLE IF NOT EXISTS "drizzle"."__drizzle_migrations" (
+  id SERIAL PRIMARY KEY,
+  hash text NOT NULL,
+  created_at bigint
+);
+
+INSERT INTO "drizzle"."__drizzle_migrations" ("hash", "created_at")
+SELECT '69a76498c84f18bc68184522fc2bb164cd28bb9e01013a64a4613a3c236d7518', 1792976461926
+WHERE NOT EXISTS (
+  SELECT 1 FROM "drizzle"."__drizzle_migrations" WHERE "created_at" >= 1792976461926
+);
+```
+
+With `psql` (or `docker exec -i plnngpkr-postgres-dev psql -U plnngpkr -d plnngpkr` for the dev Compose stack):
+
+```bash
+psql "$DATABASE_URL" <<'SQL'
+CREATE SCHEMA IF NOT EXISTS "drizzle";
+CREATE TABLE IF NOT EXISTS "drizzle"."__drizzle_migrations" (
+  id SERIAL PRIMARY KEY,
+  hash text NOT NULL,
+  created_at bigint
+);
+INSERT INTO "drizzle"."__drizzle_migrations" ("hash", "created_at")
+SELECT '69a76498c84f18bc68184522fc2bb164cd28bb9e01013a64a4613a3c236d7518', 1792976461926
+WHERE NOT EXISTS (
+  SELECT 1 FROM "drizzle"."__drizzle_migrations" WHERE "created_at" >= 1792976461926
+);
+SQL
+```
+
+Alternatively, for a **throwaway local database** where data is not needed, drop the existing tables (or recreate the database) and let the server apply `drizzle/migrations/` cleanly on next start:
+
+```bash
+psql "$DATABASE_URL" -c 'DROP TABLE IF EXISTS "vote_history", "stories", "rooms" CASCADE; DROP SCHEMA IF EXISTS "drizzle" CASCADE;'
 ```
 
 ---
